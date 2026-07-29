@@ -1,0 +1,10 @@
+fastapi>=0.124.0
+uvicorn>=0.46.0
+openai-agents>=0.14.6
+magic-hour>=0.63.0
+httpx>=0.28.1
+ormsgpack>=1.12.2
+pydantic>=2.13.3
+python-dotenv>=1.2.2
+google-api-python-client
+yt-dlp
