@@ -27,6 +27,7 @@ import { providerConcurrency } from "./concurrency.js";
 import type { ProjectContext } from "./context.js";
 import { estimateTtsWordsPerSecondForContext } from "./prompts.js";
 import type { Scene, VideoPlan, YouTubeClipSection } from "./schemas.js";
+import { nativeAudioVideoPrompt, sceneAudioSource, sceneUsesNativeAudio } from "./sceneAudio.js";
 import { recordTimingEvent, withTiming } from "./timings.js";
 import { DEFAULT_HUME_UGC_VOICE_DESCRIPTION } from "./voices.js";
 
@@ -155,6 +156,43 @@ function magicHourSubmitOptions(): { timeout: number; retries: { maxRetries: num
     timeout: Math.max(5_000, Number(process.env.MAGIC_HOUR_SUBMIT_TIMEOUT_MS ?? "60000")),
     retries: { maxRetries: 0 },
   };
+}
+
+export function minimaxH3RequestBody(ctx: ProjectContext, scene: Scene, uploadedImagePath: string): Record<string, any> {
+  const useNativeAudio = sceneUsesNativeAudio(scene);
+  return {
+    assets: { image_file_path: uploadedImagePath },
+    audio: useNativeAudio,
+    end_seconds: scene.duration_seconds,
+    model: "minimax-h3",
+    name: `${ctx.project_id}-${scene.id}`,
+    resolution: ctx.resolution,
+    style: { prompt: useNativeAudio ? nativeAudioVideoPrompt(scene) : scene.video_prompt },
+  };
+}
+
+async function submitMinimaxH3ImageToVideo(
+  ctx: ProjectContext,
+  scene: Scene,
+  imagePath: string,
+): Promise<any> {
+  const client = magicHourClient(ctx);
+  const uploadedImagePath = await client.v1.files.uploadFile(imagePath);
+  const timeoutMs = Math.max(5_000, Number(process.env.MAGIC_HOUR_SUBMIT_TIMEOUT_MS ?? "60000"));
+  const response = await fetch("https://api.magichour.ai/v1/image-to-video", {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${ctx.magic_hour_api_key}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(minimaxH3RequestBody(ctx, scene, uploadedImagePath)),
+    signal: AbortSignal.timeout(timeoutMs),
+  });
+  if (!response.ok) {
+    const detail = (await response.text()).slice(0, 1_000);
+    throw new Error(`Magic Hour MiniMax H3 submission failed (${response.status}): ${detail || response.statusText}`);
+  }
+  return response.json();
 }
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -793,6 +831,8 @@ function videoStatusError(result: any): string {
 export async function submitVideoAssetJob(ctx: ProjectContext, scene: Scene, image: ImageAsset): Promise<VideoAssetJob> {
   const outDir = path.join(ctx.project_dir, "videos", scene.id);
   resetProviderOutputDir(outDir);
+  const useNativeAudio = ctx.video_model === "minimax-h3" && sceneUsesNativeAudio(scene);
+  const providerPrompt = useNativeAudio ? nativeAudioVideoPrompt(scene) : scene.video_prompt;
   const result: any = await withTiming(ctx, "magic_hour.i2v.submit", {
     scene_id: scene.id,
     model: ctx.video_model,
@@ -801,23 +841,25 @@ export async function submitVideoAssetJob(ctx: ProjectContext, scene: Scene, ima
     wait_for_completion: false,
   }, () =>
     providerConcurrency.magicHourSubmit.run(`i2v:${ctx.project_id}:${scene.id}`, () =>
-      magicHourClient(ctx).v1.imageToVideo.generate(
-        {
-          assets: { imageFilePath: image.path },
-          endSeconds: scene.duration_seconds,
-          model: ctx.video_model as any,
-          name: `${ctx.project_id}-${scene.id}`,
-          resolution: ctx.resolution as any,
-          style: { prompt: scene.video_prompt },
-          audio: ctx.video_audio,
-        },
-        {
-          waitForCompletion: false,
-          downloadOutputs: false,
-          downloadDirectory: outDir,
-          ...magicHourSubmitOptions(),
-        },
-      ),
+      ctx.video_model === "minimax-h3"
+        ? submitMinimaxH3ImageToVideo(ctx, scene, image.path)
+        : magicHourClient(ctx).v1.imageToVideo.generate(
+            {
+              assets: { imageFilePath: image.path },
+              endSeconds: scene.duration_seconds,
+              model: ctx.video_model as any,
+              name: `${ctx.project_id}-${scene.id}`,
+              resolution: ctx.resolution as any,
+              style: { prompt: providerPrompt },
+              audio: false,
+            },
+            {
+              waitForCompletion: false,
+              downloadOutputs: false,
+              downloadDirectory: outDir,
+              ...magicHourSubmitOptions(),
+            },
+          ),
     ),
   );
   const providerJobId = result?.id;
@@ -834,10 +876,10 @@ export async function submitVideoAssetJob(ctx: ProjectContext, scene: Scene, ima
     image,
     out_dir: outDir,
     provider_job_id: String(providerJobId),
-    prompt: scene.video_prompt,
+    prompt: providerPrompt,
     model: ctx.video_model,
     resolution: ctx.resolution,
-    audio: ctx.video_audio,
+    audio: useNativeAudio,
     duration_seconds: scene.duration_seconds,
     submitted_status: status ? String(status) : null,
   };
@@ -1008,7 +1050,7 @@ export async function pollVideoAssetJob(ctx: ProjectContext, job: VideoAssetJob)
     scene_id: job.scene.id,
     provider_job_id: job.provider_job_id,
   }, () => ensureProviderOutputDownloaded(result, job.out_dir, "video"));
-  return {
+  const asset: VideoAsset = {
     scene_id: job.scene.id,
     path: downloaded,
     prompt: job.prompt,
@@ -1019,7 +1061,18 @@ export async function pollVideoAssetJob(ctx: ProjectContext, job: VideoAssetJob)
     provider_job_id: job.provider_job_id,
     provider_url: firstDownloadUrl(result),
     provider_status: result?.status ?? null,
+    audio_source: sceneAudioSource(job.scene),
   };
+  if (job.audio) {
+    const streams = await probeMediaStreamDurations(downloaded);
+    const audioDuration = Number(streams.audio_duration_seconds ?? 0);
+    if (!Number.isFinite(audioDuration) || audioDuration <= 0) {
+      throw new Error(`MiniMax H3 completed ${job.scene.id} without the requested native audio stream.`);
+    }
+    asset.has_embedded_audio = true;
+    asset.audio_duration_seconds = audioDuration;
+  }
+  return asset;
 }
 
 export async function recoverVideoAssetFromProviderJob(
@@ -1053,7 +1106,19 @@ export async function recoverVideoAssetFromProviderJob(
     provider_url: firstDownloadUrl(result),
     provider_status: result?.status ?? null,
   };
-  if (!isTalking) return base;
+  if (!isTalking) {
+    if (job.audio === true) {
+      const streams = await probeMediaStreamDurations(downloaded);
+      const audioDuration = Number(streams.audio_duration_seconds ?? 0);
+      if (!Number.isFinite(audioDuration) || audioDuration <= 0) {
+        throw new Error(`Recovered H3 scene ${job.scene.id} has no native audio stream.`);
+      }
+      base.has_embedded_audio = true;
+      base.audio_duration_seconds = audioDuration;
+      base.audio_source = sceneAudioSource(job.scene);
+    }
+    return base;
+  }
   if (!job.audio_path || !(Number(job.audio_duration_seconds) > 0)) {
     throw new Error(`Recovered talking-photo job ${job.provider_job_id} is missing its scene audio metadata.`);
   }
@@ -2352,18 +2417,19 @@ export async function stitchTimelineAssets(
  * concatenation can never drift audio out of sync with footage.
  */
 async function muxSection(
-  ctx: ProjectContext,
   normalizedVideo: string,
   audioPath: string,
   audioDuration: number,
   output: string,
   targetDurationSeconds?: number | null,
+  allowAudioTrimToTarget = false,
 ): Promise<string> {
   const videoDuration = await probeMediaDuration(normalizedVideo);
   const requestedTarget = Number(targetDurationSeconds ?? 0);
   if (
     Number.isFinite(requestedTarget) &&
     requestedTarget > 0 &&
+    !allowAudioTrimToTarget &&
     audioDuration > requestedTarget + AUDIO_DURATION_CODEC_TOLERANCE_SECONDS
   ) {
     throw new Error(
@@ -2373,7 +2439,9 @@ async function muxSection(
   }
   const sectionDuration =
     Number.isFinite(requestedTarget) && requestedTarget > 0
-      ? Math.max(requestedTarget, audioDuration)
+      ? allowAudioTrimToTarget
+        ? requestedTarget
+        : Math.max(requestedTarget, audioDuration)
       : audioDuration;
   const padDuration = Math.max(0.0, sectionDuration - videoDuration);
   await runFfmpeg(
@@ -2406,13 +2474,13 @@ export interface PerSectionScene {
   audio_path: string;
   audio_duration_seconds: number;
   target_duration_seconds?: number | null;
+  allow_audio_trim_to_target?: boolean;
   [key: string]: any;
 }
 
 async function normalizeFinalDuration(
   ctx: ProjectContext,
   input: string,
-  output: string,
   targetDuration: number,
 ): Promise<string> {
     const sourceDuration = await probeMediaDuration(input);
@@ -2475,12 +2543,12 @@ export async function stitchAssetsPerSection(
       target_duration_seconds: Number.isFinite(targetDuration) && targetDuration > 0 ? targetDuration : null,
     });
     const muxed = await muxSection(
-      ctx,
       normalized,
       scene.audio_path,
       Number(scene.audio_duration_seconds),
       path.join(sectionsDir, label),
       Number.isFinite(targetDuration) && targetDuration > 0 ? targetDuration : null,
+      scene.allow_audio_trim_to_target === true,
     );
     muxedPaths.push(muxed);
   }
@@ -2518,9 +2586,7 @@ export async function stitchAssetsPerSection(
   if (options.target_duration_seconds != null) {
     const targetDuration = Number(options.target_duration_seconds);
     if (Number.isFinite(targetDuration) && targetDuration > 0) {
-      const timed = path.join(ctx.project_dir, "final_timed.mp4");
-      const normalized = await normalizeFinalDuration(ctx, final, timed, targetDuration);
-      if (normalized === timed) renameSync(timed, final);
+      await normalizeFinalDuration(ctx, final, targetDuration);
     }
   }
 

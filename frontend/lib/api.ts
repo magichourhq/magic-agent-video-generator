@@ -9,7 +9,6 @@ import type {
   TimelineEditPayload,
   YouTubeReviewBatchResponse,
   YouTubeReviewCommentPayload,
-  YouTubeReviewSessionPayload,
   YouTubeReviewSessionResponse,
 } from "./types";
 
@@ -102,24 +101,6 @@ export async function patchProjectTimeline(
   return parseOrThrow<ProjectStatusResponse>(response);
 }
 
-export async function createYoutubeReviewSession(
-  payload: YouTubeReviewSessionPayload,
-): Promise<YouTubeReviewSessionResponse> {
-  const response = await fetch(`${API_BASE}/api/youtube-review-sessions`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(payload),
-  });
-  return parseOrThrow<YouTubeReviewSessionResponse>(response);
-}
-
-export async function getYoutubeReviewSession(reviewId: string): Promise<YouTubeReviewSessionResponse> {
-  const response = await fetch(`${API_BASE}/api/youtube-review-sessions/${reviewId}`, {
-    cache: "no-store",
-  });
-  return parseOrThrow<YouTubeReviewSessionResponse>(response);
-}
-
 export async function saveYoutubeReviewComment(
   reviewId: string,
   payload: YouTubeReviewCommentPayload,
@@ -136,13 +117,6 @@ export async function createYoutubeReviewBatch(): Promise<YouTubeReviewBatchResp
   const response = await fetch(`${API_BASE}/api/youtube-review-batches`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-  });
-  return parseOrThrow<YouTubeReviewBatchResponse>(response);
-}
-
-export async function getYoutubeReviewBatch(batchId: string): Promise<YouTubeReviewBatchResponse> {
-  const response = await fetch(`${API_BASE}/api/youtube-review-batches/${batchId}`, {
-    cache: "no-store",
   });
   return parseOrThrow<YouTubeReviewBatchResponse>(response);
 }

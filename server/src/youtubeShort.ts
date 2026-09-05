@@ -1872,10 +1872,6 @@ async function searchVideoCandidates(query: string, limit = 5): Promise<Candidat
   return searchVideoCandidatesWithProvider(query, limit);
 }
 
-async function searchVideoIds(query: string, limit = 5): Promise<string[]> {
-  return (await searchVideoCandidates(query, limit)).map((candidate) => candidate.video_id as string);
-}
-
 function ytDlpCommand(): string[] {
   return ENV.YT_DLP_PATH ? [ENV.YT_DLP_PATH] : ["yt-dlp"];
 }
@@ -2526,8 +2522,4 @@ export async function downloadYoutubeClipAssets(
   const settled = await Promise.allSettled(sections.map((section) => downloadCall(section)));
   return settled.map((result) => (result.status === "fulfilled" ? result.value : toError(result.reason)));
 }
-
-// Referenced to keep the legacy helper surface intact (unused internally,
-// mirrors _search_video_ids in the Python module).
-export { searchVideoIds as _searchVideoIds };
 

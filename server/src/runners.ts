@@ -204,7 +204,7 @@ async function runAgentStreamed(
         const retryable =
           interrupted &&
           transportAttempt === 1 &&
-          !emittedVisibleOutput;
+          !acceptedPlanExists;
         if (!retryable) throw error;
         recordTimingEvent(ctx, {
           phase: "event",
@@ -608,7 +608,7 @@ export async function runProjectMessage(
       message: "Agent is handling the project message.",
       manifest: previousManifest,
     });
-    const brief = buildProjectMessageBrief(projectId, message, ctx, readProjectStatus(projectId));
+    const brief = buildProjectMessageBrief(message, ctx, readProjectStatus(projectId));
     const runtime = runtimeFromContext(ctx);
     const { finalOutput, usage } = await runAgentStreamed(projectMessageAgentForContext(ctx), brief, ctx, runtime);
     const tokenOutput = writeTokenOutput(ctx, usage, runtime.model, runtime.provider);

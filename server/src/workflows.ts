@@ -1,6 +1,5 @@
 import { copyFileSync, existsSync, mkdirSync, readFileSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
 import path from "node:path";
-import { ENV } from "./config.js";
 import {
   audioPerformanceForGeneration,
   audioPerformanceIssues,
@@ -46,6 +45,14 @@ import {
 } from "./media.js";
 import { inputMediaPath } from "./inputMedia.js";
 import { boolSetting, inferYoutubeOutputAspectRatio, requestFromProjectState } from "./projectContext.js";
+import { buildPlanReadinessReport, planIssueFamily } from "./planReadiness.js";
+import {
+  planNeedsPerSceneAudio,
+  sceneAudioSource,
+  sceneUsesExternalSpeech,
+  sceneUsesNativeAudio,
+  validateSceneAudioContract,
+} from "./sceneAudio.js";
 import { exportYoutubeFinalVideo, PROJECT_ID_PATTERN, publicMediaPath, updateProjectStatus, withMediaUrl } from "./projects.js";
 import {
   countSpokenWords,
@@ -113,7 +120,6 @@ import {
   elevenLabsVoiceNameForPlan,
   humeVoiceDescriptionForPlan,
   normalizePlanVoice,
-  resolvePlanVoiceKey,
   resolveVoiceReferenceId,
   voiceContinuityIssues,
 } from "./voices.js";
@@ -153,6 +159,14 @@ export function normalizePlan(plan: VideoPlan): VideoPlan {
           ? `${imagePrompt} Required visible subjects in this single keyframe: ${requiredSubjects.join("; ")}.`
           : imagePrompt,
       video_prompt: scene.video_prompt.split(/\s+/).filter(Boolean).join(" "),
+      audio_source:
+        scene.audio_source ??
+        (scene.on_camera === true
+          ? "speech_driven"
+          : String(scene.narration ?? "").trim()
+            ? "voiceover"
+            : "native_scene_audio"),
+      native_audio_prompt: scene.native_audio_prompt?.split(/\s+/).filter(Boolean).join(" ") || null,
       continuity: {
         ...scene.continuity,
         story_beat: scene.continuity.story_beat.split(/\s+/).filter(Boolean).join(" "),
@@ -235,16 +249,6 @@ const MIN_RUNTIME_COVERAGE_RATIO = 0.95;
 const RUNTIME_COVERAGE_EPSILON_SECONDS = 1;
 const MAX_DRAFT_VIDEO_PLAN_REPAIR_FAILURES = 1;
 const MAX_REPAIR_INTRODUCED_REGRESSION_FAILURES = 2;
-
-function planIssueFamily(issue: string): string {
-  if (/under-scripted|spoken words|narration|voiceover|speech/i.test(issue)) return "spoken_script";
-  if (/opening state|closing state|continuity|geometry|fall|catch|landing|collision|screen direction/i.test(issue)) {
-    return "physical_continuity";
-  }
-  if (/duration|runtime|seconds/i.test(issue)) return "runtime";
-  if (/image|keyframe|visual|subject|object|split|collage/i.test(issue)) return "visual_prompt";
-  return issue.toLowerCase().replace(/\bscene_\d+\b/g, "scene").split(/[.:;]/, 1)[0]!.trim();
-}
 
 export function repairIntroducedOnlyNewIssueFamilies(
   previousIssues: string[],
@@ -1144,6 +1148,8 @@ function fallbackUgcProductPlan(request: CreateProjectRequest): {
       video_prompt: copy.videoPrompts[0]!,
       duration_seconds: hookSeconds,
       on_camera: false,
+      audio_source: "voiceover",
+      native_audio_prompt: null,
       audio_mode: "ugc_hook",
       audio_note: null,
       reference_media_ids: [],
@@ -1163,6 +1169,8 @@ function fallbackUgcProductPlan(request: CreateProjectRequest): {
       video_prompt: copy.videoPrompts[(index + 1) % copy.videoPrompts.length]!,
       duration_seconds: duration,
       on_camera: false,
+      audio_source: "voiceover" as const,
+      native_audio_prompt: null,
       audio_mode: "product_proof" as const,
       audio_note: null,
       reference_media_ids: [],
@@ -1182,6 +1190,8 @@ function fallbackUgcProductPlan(request: CreateProjectRequest): {
       video_prompt: copy.videoPrompts[copy.videoPrompts.length - 1]!,
       duration_seconds: payoffSeconds,
       on_camera: false,
+      audio_source: "voiceover",
+      native_audio_prompt: null,
       audio_mode: "testimonial",
       audio_note: null,
       reference_media_ids: [],
@@ -1291,9 +1301,14 @@ function focusedPlanRepairRules(issues: string[]): string[] {
       "- This draft is over-scripted: shorten only the affected narration, keep complete sentences, and preserve every explicit user fact and quoted line.",
     );
   }
+  if (/mid-thought|complete spoken sentence/i.test(issueText)) {
+    rules.push(
+      "- Replace every reported trailing fragment with a complete natural sentence. Never end narration on an article, conjunction, preposition, or possessive; reread the final word of every scene before resubmitting.",
+    );
+  }
   if (/ending claim|quoted user speech/i.test(issueText)) {
     rules.push(
-      "- Preserve the requested spoken wording in the required scene. Add it without dropping another required fact or exact quoted line.",
+      "- Preserve the requested spoken wording verbatim in the required scene. For an ending claim, place the complete requested claim in the final scene narration, then reread the final narration field before resubmitting.",
     );
   }
   if (/duration|runtime|seconds|supported/i.test(issueText)) {
@@ -2053,6 +2068,11 @@ export async function draftVideoPlanImpl(
       ...(request ? validateSceneSpeechAndVisualCoverage(plan, request, ctx) : []),
       ...audioPerformanceIssues(plan),
       ...voiceContinuityIssues(plan),
+      ...validateSceneAudioContract(
+        plan,
+        ctx.video_model,
+        Boolean(request?.input_media.some((media) => media.kind === "audio")),
+      ),
       ...inputMediaIssues,
       ...(request && creativeIntent ? validatePlanForCreativeIntent(plan, creativeIntent, request) : []),
     ];
@@ -2071,6 +2091,8 @@ export async function draftVideoPlanImpl(
         previousFailures === 1 && repairIntroducedOnlyNewIssueFamilies(previousIssues, qualityIssues)
           ? MAX_REPAIR_INTRODUCED_REGRESSION_FAILURES
           : MAX_DRAFT_VIDEO_PLAN_REPAIR_FAILURES;
+      const readiness = buildPlanReadinessReport(qualityIssues, qualityWarnings, previousFailures + 1);
+      writeJsonArtifact(ctx, "plan_readiness", readiness);
       updateProjectState(ctx, {
         status: {
           status: "running",
@@ -2088,6 +2110,7 @@ export async function draftVideoPlanImpl(
             warnings: qualityWarnings,
             creative_intent: creativeIntent,
             creative_vibe: plan.creative_vibe,
+            readiness,
           },
         },
       });
@@ -2110,6 +2133,7 @@ export async function draftVideoPlanImpl(
         stage: "plan_validation_failed",
         validation_failed: true,
         issues: qualityIssues,
+        readiness,
         creative_intent: creativeIntent,
         creative_vibe: plan.creative_vibe,
         message: [
@@ -2126,6 +2150,8 @@ export async function draftVideoPlanImpl(
   assertCanStartFreshPlan(ctx);
   clearRenderOutputs(ctx);
   writeJsonArtifact(ctx, "plan", plan);
+  const readiness = buildPlanReadinessReport([], [], 0);
+  writeJsonArtifact(ctx, "plan_readiness", readiness);
   writeJsonArtifact(ctx, "failed_scenes", []);
   updateProjectState(ctx, {
     current_plan: plan,
@@ -2139,13 +2165,19 @@ export async function draftVideoPlanImpl(
     decision: {
       tool: "draft_video_plan",
       decision: `Drafted plan '${plan.title}' with ${plan.scenes.length} scene(s).`,
-      metadata: { scene_ids: plan.scenes.map((scene) => scene.id), creative_intent: creativeIntent, creative_vibe: plan.creative_vibe },
+      metadata: {
+        scene_ids: plan.scenes.map((scene) => scene.id),
+        creative_intent: creativeIntent,
+        creative_vibe: plan.creative_vibe,
+        readiness,
+      },
     },
   });
   return {
     project_id: ctx.project_id,
     stage: "plan_drafted",
     plan,
+    readiness,
     next_tools: ["generate_voiceover"],
   };
   });
@@ -2159,7 +2191,7 @@ export async function generateVoiceoverImpl(ctx: ProjectContext): Promise<JsonDi
   const plan = loadVideoPlan(ctx);
   const request = requestFromProjectState(ctx);
   const existingVoiceover = readJsonArtifact<JsonDict>(ctx, "voiceover", null);
-  if (existingVoiceover?.path && existsSync(String(existingVoiceover.path))) {
+  if (existingVoiceover?.path && existsSync(String(existingVoiceover.path)) && !planNeedsPerSceneAudio(plan)) {
     updateProjectState(ctx, {
       status: { stage: "voiceover_generated", progress: 30, message: "Voiceover already generated." },
       decision: {
@@ -2214,15 +2246,14 @@ export async function generateVoiceoverImpl(ctx: ProjectContext): Promise<JsonDi
       next_tools: ["generate_scene_images", "animate_scene_videos"],
     };
   }
-  if (plan.scenes.some((s) => s.on_camera === true)) {
-    // Talking-photo and mixed UGC renders use per-scene audio: on-camera clips
-    // need lip-sync audio, and b-roll gets its own per-scene VO for stitching.
-    // The single global narration mp3 would be unused dead weight. Skip rendering
-    // and persisting the `voiceover` artifact, but synthesize all scene audio
-    // now so TTS/auth/credit failures happen before paid image/video calls.
+  if (planNeedsPerSceneAudio(plan)) {
+    // Mixed audio plans are assembled per scene. Generate external speech only
+    // where TTS owns the sound; native H3 scenes keep their provider audio.
     const voiceCtx = voiceContextForPlan(ctx, plan);
     const voiceReferenceId = resolveVoiceReferenceId(plan, voiceCtx);
-    const voicedScenes = plan.scenes.filter((scene) => String(scene.narration ?? "").trim());
+    const voicedScenes = plan.scenes.filter(
+      (scene) => sceneUsesExternalSpeech(scene) && String(scene.narration ?? "").trim(),
+    );
     const sceneVoiceovers = await ensureSceneVoiceovers(voiceCtx, voicedScenes, voiceReferenceId, plan);
     const coverageIssues = actualMixedVoiceoverCoverageIssues(plan, sceneVoiceovers, requestFromProjectState(ctx));
     if (coverageIssues.length > 0) {
@@ -2275,12 +2306,13 @@ export async function generateVoiceoverImpl(ctx: ProjectContext): Promise<JsonDi
       status: { stage: "voiceover_generated", progress: 30, message: "Voiceover skipped (per-scene audio plan)." },
       decision: {
         tool: "generate_voiceover",
-        decision: "Generated per-scene voiceover audio and skipped unused global voiceover.",
+        decision: "Prepared external scene speech and preserved native H3 scene audio ownership.",
         metadata: {
           skipped: true,
           reason: "per_scene_audio",
           scene_voiceover_count: sceneVoiceovers.length,
           scene_ids: sceneVoiceovers.map((voiceover) => voiceover.scene_id),
+          native_audio_scene_ids: plan.scenes.filter(sceneUsesNativeAudio).map((scene) => scene.id),
         },
       },
     });
@@ -2893,8 +2925,8 @@ export async function animateSceneVideosImpl(
   // KEYFRAME IMAGE + per-scene audio straight into AI Talking Photo (one submitted job,
   // NO silent imageToVideo pass — that's the latency win). B-roll cutaways still
   // render a silent imageToVideo clip and get their own VO at stitch time.
-  const talkingPairs = videoScenePairs.filter(([scene]) => scene.on_camera === true);
-  const brollPairs = videoScenePairs.filter(([scene]) => scene.on_camera !== true);
+  const talkingPairs = videoScenePairs.filter(([scene]) => sceneAudioSource(scene) === "speech_driven");
+  const brollPairs = videoScenePairs.filter(([scene]) => sceneAudioSource(scene) !== "speech_driven");
 
   // Per-scene TTS only needs the plan/script, not any rendered clip, so kick it
   // off CONCURRENTLY with both render batches (overlapping latency) and await it
@@ -3093,9 +3125,8 @@ async function existingSceneVoiceover(
 /**
  * Build the per-scene stitch inputs for the audio-preserving assembler.
  *
- * Talking scenes (on-camera / embedded audio) reuse their own lip-sync mp3 that
- * Task 5 attached to the video entry. B-roll cutaways carry no audio, so each
- * gets a per-scene VO take generated on demand so the section is never silent.
+ * Speech-driven scenes reuse their lip-sync mp3, native H3 scenes reuse the
+ * generated video's audio stream, and voiceover scenes receive external TTS.
  */
 async function buildPerSceneStitchInputs(
   ctx: ProjectContext,
@@ -3106,8 +3137,11 @@ async function buildPerSceneStitchInputs(
   const voiceCtx = voiceContextForPlan(ctx, plan);
   const voiceReferenceId = resolveVoiceReferenceId(plan, voiceCtx);
   const sceneById = new Map(plan.scenes.map((scene) => [scene.id, scene]));
-  const brollScenes = videos
-    .filter((video) => video.on_camera !== true && video.has_embedded_audio !== true)
+  const voiceoverScenes = videos
+    .filter((video) => {
+      const scene = sceneById.get(String(video.scene_id));
+      return scene ? sceneAudioSource(scene) === "voiceover" : false;
+    })
     .map((video) => {
       const scene = sceneById.get(String(video.scene_id));
       if (!scene) {
@@ -3115,29 +3149,36 @@ async function buildPerSceneStitchInputs(
       }
       return scene;
     });
-  const brollVoiceovers = new Map<string, { scene_id: string; path: string; duration_seconds: number }>();
-  for (const vo of await ensureSceneVoiceovers(voiceCtx, brollScenes, voiceReferenceId, plan)) {
-    brollVoiceovers.set(vo.scene_id, vo);
+  const sceneVoiceovers = new Map<string, { scene_id: string; path: string; duration_seconds: number }>();
+  for (const vo of await ensureSceneVoiceovers(voiceCtx, voiceoverScenes, voiceReferenceId, plan)) {
+    sceneVoiceovers.set(vo.scene_id, vo);
   }
 
   for (const v of videos) {
-    if (v.on_camera === true || v.has_embedded_audio === true) {
-      const scene = sceneById.get(String(v.scene_id));
+    const scene = sceneById.get(String(v.scene_id));
+    if (!scene) {
+      throw new Error(`No plan scene matched video entry ${String(v.scene_id)} while building stitch inputs.`);
+    }
+    const source = sceneAudioSource(scene);
+    if (source === "speech_driven" || source === "native_scene_audio") {
       const persistedAudio =
         typeof v.audio_path === "string" && existsSync(v.audio_path) ? v.audio_path : null;
       const duration = Number(v.audio_duration_seconds ?? v.duration_seconds);
+      if (source === "native_scene_audio" && v.has_embedded_audio !== true) {
+        throw new Error(`${scene.id} expected native H3 audio, but the rendered asset was not marked audio-bearing.`);
+      }
       result.push({
         video_path: String(v.path),
         audio_path: persistedAudio ?? String(v.path),
         audio_duration_seconds: Number.isFinite(duration) && duration > 0 ? duration : Number(v.duration_seconds),
-        target_duration_seconds: scene?.on_camera === true ? null : scene?.duration_seconds ?? null,
+        target_duration_seconds: source === "speech_driven" ? null : scene.duration_seconds,
+        // H3 often returns a few codec frames beyond the requested duration.
+        // Its native ambience/foley follows the same scene boundary and may be
+        // trimmed with the video; protected external speech must never be cut.
+        allow_audio_trim_to_target: source === "native_scene_audio",
       });
     } else {
-      const scene = sceneById.get(String(v.scene_id));
-      if (!scene) {
-        throw new Error(`No plan scene matched video entry ${String(v.scene_id)} while building stitch inputs.`);
-      }
-      const vo = brollVoiceovers.get(String(v.scene_id));
+      const vo = sceneVoiceovers.get(String(v.scene_id));
       if (!vo) {
         throw new Error(`Per-scene voiceover generation returned no take for scene ${String(v.scene_id)}.`);
       }
@@ -3221,10 +3262,10 @@ export async function stitchFinalVideoImpl(ctx: ProjectContext, tokenOutput: Jso
     const detail = failuresText ? ` Failures: ${failuresText}` : "";
     throw new Error(`No scene videos completed, so no final MP4 can be stitched.${detail}`);
   }
-  const hasTalking = anyEmbeddedAudio(videos as any[]);
-  // Talking projects carry per-scene audio, so a global voiceover is optional;
-  // pure b-roll projects still require one.
-  if (!voiceover && !hasTalking) {
+  const hasPerSceneAudio = anyEmbeddedAudio(videos as any[]) || planNeedsPerSceneAudio(plan);
+  // Mixed/native projects carry per-scene audio, so a global voiceover is optional;
+  // pure voiceover projects still require one.
+  if (!voiceover && !hasPerSceneAudio) {
     throw new Error("No voiceover asset found. Call generate_voiceover before stitching.");
   }
 
@@ -3238,7 +3279,7 @@ export async function stitchFinalVideoImpl(ctx: ProjectContext, tokenOutput: Jso
       });
 
   let finalVideo: string;
-  if (hasTalking) {
+  if (hasPerSceneAudio) {
     const perScene = await buildPerSceneStitchInputs(ctx, plan, videos);
     const target = mixedTargetDurationSeconds(
       timeline,
@@ -3287,6 +3328,8 @@ export function youtubeSectionsToVideoPlan(title: string, narration: string, sec
     video_prompt: `YouTube clip search: ${section.search_hint}`,
     duration_seconds: section.duration_seconds,
     on_camera: false,
+    audio_source: "voiceover",
+    native_audio_prompt: null,
     audio_mode: "tutorial_clear",
     audio_note: null,
     reference_media_ids: [],
@@ -3647,15 +3690,15 @@ export async function inspectRenderStatusImpl(ctx: ProjectContext): Promise<Json
     nextTools.push("draft_video_plan");
   } else {
     const plan = VideoPlanSchema.parse(planPayload);
-    const hasTalking = anyEmbeddedAudio(videos);
-    const needsGlobalVoiceover = !plan.scenes.some((scene) => scene.on_camera === true);
+    const hasPerSceneAudio = anyEmbeddedAudio(videos) || planNeedsPerSceneAudio(plan);
+    const needsGlobalVoiceover = !planNeedsPerSceneAudio(plan);
     if (!artifacts.voiceover && needsGlobalVoiceover) nextTools.push("generate_voiceover");
     if (missingImages.length > 0) nextTools.push("generate_scene_images");
     if (recoverableFailedScenes.length > 0 && !artifacts.manifest) nextTools.push("stitch_final_video");
     if (missingVideos.length > 0 && missingImages.length === 0 && recoverableFailedScenes.length === 0) {
       nextTools.push("animate_scene_videos");
     }
-    if (videos.length > 0 && (artifacts.voiceover || hasTalking) && !artifacts.manifest) nextTools.push("stitch_final_video");
+    if (videos.length > 0 && (artifacts.voiceover || hasPerSceneAudio) && !artifacts.manifest) nextTools.push("stitch_final_video");
     if (failedScenes.length > 0) nextTools.push("retry_scene");
   }
 

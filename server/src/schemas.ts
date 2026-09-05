@@ -20,6 +20,7 @@ export const AUDIO_MODES = [
   "urgent_reaction",
   "mostly_visual",
 ] as const;
+export const SCENE_AUDIO_SOURCES = ["voiceover", "speech_driven", "native_scene_audio"] as const;
 export const VIDEO_VIBES = [
   "raw_ugc",
   "polished_ugc",
@@ -58,6 +59,7 @@ export const MAGIC_VIDEO_MODELS = [
   "default",
   "ltx-2",
   "ltx-2.3",
+  "minimax-h3",
   "wan-2.2",
   "seedance",
   "seedance-2.0",
@@ -70,19 +72,14 @@ export const MAGIC_VIDEO_MODELS = [
 ] as const;
 
 export type AspectRatio = (typeof ASPECT_RATIOS)[number];
-export type Resolution = (typeof RESOLUTIONS)[number];
-export type WorkflowMode = (typeof WORKFLOW_MODES)[number];
-export type YouTubeSearchProvider = (typeof YOUTUBE_SEARCH_PROVIDERS)[number];
 export type YouTubeReviewProvider = (typeof YOUTUBE_REVIEW_PROVIDERS)[number];
 export type AgentModelProvider = (typeof AGENT_MODEL_PROVIDERS)[number];
 export type AgentModelIntensity = (typeof AGENT_MODEL_INTENSITIES)[number];
 export type AudioProvider = (typeof AUDIO_PROVIDERS)[number];
 export type AudioMode = (typeof AUDIO_MODES)[number];
+export type SceneAudioSource = (typeof SCENE_AUDIO_SOURCES)[number];
 export type VideoVibe = (typeof VIDEO_VIBES)[number];
-export type MagicImageModel = (typeof MAGIC_IMAGE_MODELS)[number];
 export type MagicImageResolution = (typeof MAGIC_IMAGE_RESOLUTIONS)[number];
-export type MagicImageStyleTool = (typeof MAGIC_IMAGE_STYLE_TOOLS)[number];
-export type MagicVideoModel = (typeof MAGIC_VIDEO_MODELS)[number];
 export type ProjectStatus = "queued" | "running" | "succeeded" | "failed";
 
 export const MAGIC_IMAGE_MODEL_RESOLUTIONS: Record<string, Set<string>> = {
@@ -97,6 +94,7 @@ export const MAGIC_IMAGE_MODEL_RESOLUTIONS: Record<string, Set<string>> = {
 export const MAGIC_VIDEO_MODEL_RESOLUTIONS: Record<string, Set<string>> = {
   "ltx-2": new Set(["480p", "720p", "1080p"]),
   "ltx-2.3": new Set(["480p", "720p", "1080p"]),
+  "minimax-h3": new Set(["480p", "720p", "1080p"]),
   "wan-2.2": new Set(["480p", "720p", "1080p"]),
   seedance: new Set(["480p", "720p", "1080p"]),
   "seedance-2.0": new Set(["480p", "720p"]),
@@ -110,6 +108,7 @@ export const MAGIC_VIDEO_MODEL_RESOLUTIONS: Record<string, Set<string>> = {
 export const MAGIC_VIDEO_MODEL_DURATIONS: Record<string, Set<number>> = {
   "ltx-2": new Set([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 15, 20, 25, 30]),
   "ltx-2.3": new Set([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 15, 20, 25, 30]),
+  "minimax-h3": new Set([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 15, 20, 25, 30]),
   "wan-2.2": new Set([3, 4, 5, 6, 7, 8, 9, 10, 15]),
   seedance: new Set([2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]),
   "seedance-2.0": new Set([4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]),
@@ -165,6 +164,14 @@ export const SceneSchema = z.object({
   on_camera: z.boolean().describe(
     "Required scene tool choice. Default false. True only when the user explicitly asked for an on-screen creator, person, character, avatar, or founder to speak/say/talk/lip-sync this scene's dialogue. False for ordinary UGC, product proof, screen, cinematic, tutorial, or b-roll/demo footage whose narration plays as voiceover.",
   ),
+  audio_source: z.enum(SCENE_AUDIO_SOURCES).nullable().describe(
+    "Who owns this scene's sound. voiceover uses the configured TTS voice over non-speaking footage; " +
+      "speech_driven uses TTS to drive visible speech/lip-sync; native_scene_audio keeps MiniMax H3's generated dialogue, ambience, foley, and music without external TTS.",
+  ).default(null),
+  native_audio_prompt: z.string().trim().max(500).nullable().describe(
+    "Only for native_scene_audio. Describe the scene's audible dialogue, ambience, foley, and music. " +
+      "Do not include camera or visual instructions. Use null for voiceover and speech_driven scenes.",
+  ).default(null),
   audio_mode: z.enum(AUDIO_MODES).describe(
     "Compact voice delivery preset. Pick one mode only; the backend maps it to Hume speed, temperature, description, and silence settings.",
   ).nullable().default(null),
@@ -222,10 +229,6 @@ export const YOUTUBE_VIDEO_CATEGORIES = [
   "education",
   "science_technology",
 ] as const;
-export type YouTubeSearchOrder = (typeof YOUTUBE_SEARCH_ORDERS)[number];
-export type YouTubeVideoDuration = (typeof YOUTUBE_VIDEO_DURATIONS)[number];
-export type YouTubeVideoCategory = (typeof YOUTUBE_VIDEO_CATEGORIES)[number];
-
 const YOUTUBE_VIDEO_CATEGORY_SET = new Set<string>(YOUTUBE_VIDEO_CATEGORIES);
 const YouTubeVideoCategorySchema = z.preprocess((value) => {
   if (value === null || value === undefined || value === "") return null;
@@ -354,8 +357,6 @@ export const ProjectTimelineEditRequestSchema = z.discriminatedUnion("operation"
     reason: z.string().max(500).default("Make the ending deliberate."),
   }),
 ]);
-export type ProjectTimelineEditRequest = z.infer<typeof ProjectTimelineEditRequestSchema>;
-
 export const YouTubeReviewSessionRequestSchema = z.object({
   prompt: z.string().min(3).max(2_000),
   duration_seconds: z.number().int().min(1).max(60).nullish().default(null),
@@ -369,8 +370,6 @@ export const YouTubeReviewCommentRequestSchema = z.object({
   provider: z.enum(YOUTUBE_REVIEW_PROVIDERS),
   comments: z.string().max(8_000).default(""),
 });
-export type YouTubeReviewCommentRequest = z.infer<typeof YouTubeReviewCommentRequestSchema>;
-
 export interface SpeechBudget {
   words_per_second: number;
   min_words: number;

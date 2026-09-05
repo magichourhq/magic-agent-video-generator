@@ -7,6 +7,32 @@ import {
 import { CreateProjectRequestSchema } from "../src/schemas.js";
 
 describe("Magic Hour capability routing", () => {
+  it("does not mistake creator body language for a body-edit request", () => {
+    const result = classifyMagicHourRequest({
+      prompt:
+        "Create a vertical 9:16 short-form social video, 8 seconds, in a casual UGC style. " +
+        "A creator holds up a compact gadget and says through expression and body language that it is useful.",
+      workflow: "generated",
+    });
+
+    expect(result.needs_clarification).toBe(false);
+    expect(result.intent).toBe("video");
+    expect(result.capability_id).toBe("multi_scene_video");
+  });
+
+  it("does not demand product details for a non-product short-form skit", () => {
+    const result = classifyMagicHourRequest({
+      prompt:
+        "Create a vertical 9:16 short-form video, 8 seconds, as a POV relatable skit. " +
+        "One person at a desk realizes it is 2 a.m. and has a funny emotional spiral beside an empty coffee cup.",
+      workflow: "generated",
+    });
+
+    expect(result.needs_clarification).toBe(false);
+    expect(result.intent).toBe("video");
+    expect(result.capability_id).toBe("multi_scene_video");
+  });
+
   it("routes image-only prompts to standalone image generation", () => {
     const result = classifyMagicHourRequest({ prompt: "make an image of a cat wearing sunglasses", workflow: "generated" });
 

@@ -5,7 +5,6 @@ import type { VideoPlan } from "./schemas.js";
 import { normalizeTimeline } from "./timeline.js";
 
 export const PROJECT_STATE_VERSION = 1;
-const MISSING = Symbol("missing");
 
 export function utcNow(): string {
   return new Date().toISOString();

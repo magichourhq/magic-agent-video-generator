@@ -150,22 +150,20 @@ const IMPLIED_HUMAN_VIDEO =
   /\b(?:make|create|generate).*\b(?:guy|girl|person|someone|creator|founder)\b.*\b(?:work|apartment|realize|react|talk|film|filming|uses?|opens?|shows?)\b/i;
 const SOURCE_CLIP =
   /\b(youtube|source clips?|real clips?|real footage|news footage|existing footage|pull clips?|find clips?|creator clips?|real interviews|clip compilation|montage from .*clips?|podcast (?:clips?|moments?)|news and creator footage)\b/i;
-const EDIT_MEDIA = /\b(edit|replace|swap|upscale|remove background|colorize|lip[- ]?sync|face|body|head|clothes|voiceover)\b/i;
+const EDIT_MEDIA =
+  /\b(edit|replace|swap|upscale|remove background|colorize|lip[- ]?sync|face swap|body swap|head swap|change clothes|voiceover)\b/i;
 const CAPTION_REQUEST = /\b(captions?|subtitles?)\b/i;
 const EXISTING_MEDIA_REFERENCE = /\b(uploaded|attached|dropped|existing|source|input|this|my|generated)\s+(?:image|photo|video|clip|media|file|talking photo)\b/i;
 const VAGUE_CREATE = /^\s*(make|create|generate|produce|build|do)\s+(it|something|content|a\s+thing|an?\s*(image|video)?)?\s*$/i;
-const DURATION = /\b(\d+\s*[- ]?\s*(?:s|sec|second|seconds|min|minute|minutes)|about a minute|one minute|short|long|quick)\b/i;
 const EXPLICIT_DURATION = /\b(\d+\s*[- ]?\s*(?:s|sec|second|seconds|min|minute|minutes)|about a minute|one minute)\b/i;
 const EXPLICIT_VIDEO_OUTPUT_REQUEST =
   /\b(?:make|create|generate|produce|need|want)\b(?:\s+\w+){0,8}\s+\b(?:video|reel|tiktok|short|commercial|ad|ugc|film|trailer|story|explainer)\b/i;
 const EXPLICIT_IMAGE_OUTPUT_REQUEST =
   /\b(?:make|create|generate|produce|need|want)\b(?:\s+\w+){0,5}\s+\b(?:image|picture|photo|poster|thumbnail|still|wallpaper|mockup|logo|artwork|illustration|album cover|cover art|cover)\b/i;
 const UPLOADED_OR_REFERENCED = /\b(uploaded|attached|dropped|existing|source|input|this|my|reference)\b/i;
-const EXPLICIT_SOURCE_REFERENCE = /\b(uploaded|attached|dropped|existing|source|input|reference|file)\b/i;
 const IMAGE_MEDIA = /\b(image|photo|picture|portrait|drawing|sketch|storyboard|comic|sticker|line art|avatar|cartoon|illustration|selfie|headshot|logo|still frame|still|keyframe)\b/i;
 const VIDEO_MEDIA = /\b(video|clip|footage)\b/i;
 const AUDIO_MEDIA = /\b(audio|voice|voice memo|podcast|sound|song|track|narration|spoken track|recording|mp3|wav)\b/i;
-const QUOTED_OR_SPEECH = /["“”'][^"“”'\n]{4,}["“”']|\b(say|says|saying|script|dialogue|line|voiceover|audio)\b/i;
 const EXACT_QUOTED_SPEECH = /["“”'][^"“”'\n]{4,}["“”']/;
 const GENERIC_SPEECH_REFERENCE =
   /\b(?:say|says|saying|read|reads|reading)\s+(?:something|the hook|my script|the script|the line|a line|something better|whatever|it)\b/i;

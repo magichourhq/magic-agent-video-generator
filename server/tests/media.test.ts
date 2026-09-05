@@ -2,7 +2,6 @@ import { existsSync, mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { decode as msgpackDecode } from "@msgpack/msgpack";
-import { execa } from "execa";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ProjectContext } from "../src/context.js";
 import { PROJECT_CONTEXT_DEFAULTS } from "../src/context.js";
@@ -11,6 +10,7 @@ import {
   isTransientProviderError,
   magicHourPollRequestAttempts,
   magicHourPollRequestTimeoutMs,
+  minimaxH3RequestBody,
   plannedFinalDurationSeconds,
   probeMediaDuration,
   probeMediaStreamDurations,
@@ -25,6 +25,49 @@ import {
   stitchTimelineAssets,
 } from "../src/media.js";
 import type { Scene, VideoPlan } from "../src/schemas.js";
+import { makeScene, makeSilentVideo, makeTone, testContext as createTestContext } from "./helpers/testFixtures.js";
+
+describe("MiniMax H3 scene audio requests", () => {
+  const baseScene: Scene = {
+    id: "scene_1",
+    narration: "Narration stays external.",
+    image_prompt: "A full-frame cinematic keyframe.",
+    video_prompt: "The subject walks left to right.",
+    duration_seconds: 10,
+    on_camera: false,
+    audio_source: "voiceover",
+    native_audio_prompt: null,
+    audio_mode: "cinematic_narrator",
+    audio_note: null,
+    reference_media_ids: [],
+    continuity: {
+      story_beat: "The subject crosses the room.",
+      required_subjects: ["subject"],
+      opening_state: "The subject starts on the left.",
+      closing_state: "The subject finishes on the right.",
+      setting: "The same room.",
+      screen_direction: "left_to_right",
+    },
+  };
+
+  it("submits voiceover scenes to H3 with provider audio disabled", () => {
+    const body = minimaxH3RequestBody(testContext("/tmp/test"), baseScene, "api-upload.png");
+    expect(body.audio).toBe(false);
+    expect(body.style.prompt).toBe(baseScene.video_prompt);
+  });
+
+  it("enables and describes native H3 scene audio", () => {
+    const scene: Scene = {
+      ...baseScene,
+      narration: "",
+      audio_source: "native_scene_audio",
+      native_audio_prompt: "Quiet room tone, soft footsteps, and one restrained orchestral swell.",
+    };
+    const body = minimaxH3RequestBody(testContext("/tmp/test"), scene, "api-upload.png");
+    expect(body.audio).toBe(true);
+    expect(body.style.prompt).toContain("Audio: Quiet room tone");
+  });
+});
 
 describe("provider polling guards", () => {
   afterEach(() => {
@@ -47,42 +90,8 @@ describe("provider polling guards", () => {
   });
 });
 
-async function makeSilentVideo(pathname: string, seconds: number) {
-  await execa("ffmpeg", [
-    "-y",
-    "-f",
-    "lavfi",
-    "-i",
-    `color=c=black:s=320x180:d=${seconds}:r=30`,
-    "-c:v",
-    "libx264",
-    "-pix_fmt",
-    "yuv420p",
-    pathname,
-  ]);
-}
-
-async function makeTone(pathname: string, seconds: number) {
-  await execa("ffmpeg", [
-    "-y",
-    "-f",
-    "lavfi",
-    "-i",
-    `sine=frequency=440:duration=${seconds}`,
-    "-c:a",
-    "mp3",
-    pathname,
-  ]);
-}
-
 function testContext(projectDir: string): ProjectContext {
-  return {
-    project_id: "media-duration-test",
-    project_dir: projectDir,
-    aspect_ratio: "16:9",
-    resolution: "720p",
-    ...PROJECT_CONTEXT_DEFAULTS,
-  };
+  return createTestContext(projectDir, "media-duration-test");
 }
 
 function fishTestContext(projectDir: string): ProjectContext {
@@ -133,6 +142,48 @@ describe("stitchAssetsPerSection", () => {
     expect(streams.format_duration_seconds).toBeLessThanOrEqual(2.2);
     expect(streams.audio_duration_seconds).toBeGreaterThanOrEqual(1.9);
   });
+
+  it("trims native scene audio codec overrun to the planned scene boundary", async () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "media-native-audio-target-"));
+    const video = path.join(dir, "scene.mp4");
+    const audio = path.join(dir, "scene.mp3");
+    await makeSilentVideo(video, 2.34);
+    await makeTone(audio, 2.34);
+
+    const final = await stitchAssetsPerSection(testContext(dir), [
+      {
+        video_path: video,
+        audio_path: audio,
+        audio_duration_seconds: 2.34,
+        target_duration_seconds: 2,
+        allow_audio_trim_to_target: true,
+      },
+    ]);
+    const streams = await probeMediaStreamDurations(final);
+
+    expect(streams.format_duration_seconds).toBeGreaterThanOrEqual(1.9);
+    expect(streams.format_duration_seconds).toBeLessThanOrEqual(2.2);
+    expect(streams.audio_duration_seconds).toBeLessThanOrEqual(2.2);
+  });
+
+  it("still rejects an equivalent protected-speech overrun", async () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "media-protected-audio-target-"));
+    const video = path.join(dir, "scene.mp4");
+    const audio = path.join(dir, "scene.mp3");
+    await makeSilentVideo(video, 2.34);
+    await makeTone(audio, 2.34);
+
+    await expect(
+      stitchAssetsPerSection(testContext(dir), [
+        {
+          video_path: video,
+          audio_path: audio,
+          audio_duration_seconds: 2.34,
+          target_duration_seconds: 2,
+        },
+      ]),
+    ).rejects.toThrow(/audio will not be cut/);
+  });
 });
 
 describe("plannedFinalDurationSeconds", () => {
@@ -182,28 +233,6 @@ describe("conformVoiceoverToTarget", () => {
     expect(duration).toBeGreaterThanOrEqual(2.9);
   });
 });
-
-function makeScene(overrides: Partial<Scene> & Pick<Scene, "id">): Scene {
-  return {
-    narration: "",
-    image_prompt: "",
-    video_prompt: "",
-    duration_seconds: 2,
-    on_camera: true,
-    audio_mode: "ugc_casual",
-    audio_note: null,
-    reference_media_ids: [],
-    continuity: {
-      story_beat: "",
-      required_subjects: [],
-      opening_state: "",
-      closing_state: "",
-      setting: "",
-      screen_direction: "not_applicable",
-    },
-    ...overrides,
-  };
-}
 
 describe("generateSceneVoiceovers", () => {
   afterEach(() => {

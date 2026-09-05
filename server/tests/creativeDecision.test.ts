@@ -56,6 +56,8 @@ function scene(id: string, overrides: Partial<Scene> = {}): Scene {
     video_prompt: "Slow handheld push in.",
     duration_seconds: 8,
     on_camera: true,
+    audio_source: null,
+    native_audio_prompt: null,
     audio_mode: "ugc_casual",
     audio_note: null,
     reference_media_ids: [],
@@ -119,6 +121,62 @@ describe("creative intent inference", () => {
     expect(intent.format).toBe("general");
     expect(intent.speech_mode).toBe("mostly_visual");
     expect(intent.required_beats).toEqual([]);
+  });
+
+  it("activates music-video grammar only for an explicit music-video request", () => {
+    const intent = inferCreativeIntent(
+      request(
+        "Create a 42 second music video for my uploaded track with one recurring performer and cinematic night scenes.",
+        { duration_seconds: 42 },
+      ),
+      ctx(),
+    );
+
+    expect(intent.format).toBe("music_video");
+    expect(intent.goal).toBe("story");
+    expect(intent.speech_mode).toBe("mostly_visual");
+    expect(intent.suggested_vibe).toBe("cinematic_commercial");
+    expect(intent.required_beats).toEqual([]);
+    expect(intent.pacing.preferred_scene_count).toBe(6);
+    expect(creativeIntentBrief(intent)).toContain("Music-video grammar");
+    expect(creativeIntentBrief(intent)).toContain("do not convert lyrics into TTS");
+  });
+
+  it("treats an explicit video for a song as music-video intent", () => {
+    const intent = inferCreativeIntent(request("Make a 30 second video for this song with a recurring dancer."), ctx());
+
+    expect(intent.format).toBe("music_video");
+    expect(intent.speech_mode).toBe("mostly_visual");
+  });
+
+  it("preserves explicitly requested music-video narration without treating an artist brand as product proof", () => {
+    const intent = inferCreativeIntent(
+      request("Make a music video for this artist brand with a short narrator voiceover over the opening."),
+      ctx(),
+    );
+
+    expect(intent.format).toBe("music_video");
+    expect(intent.speech_mode).toBe("voiceover");
+    expect(intent.required_beats).toEqual([]);
+  });
+
+  it("does not infer music-video intent from background music or an uploaded-audio workflow alone", () => {
+    const productIntent = inferCreativeIntent(
+      request("Make a cinematic product video for a desk lamp with ambient music only."),
+      ctx(),
+    );
+    const genericAudioIntent = inferCreativeIntent(
+      request("Make a peaceful 30 second video using my uploaded audio as the voiceover."),
+      ctx(),
+    );
+    const sportsIntent = inferCreativeIntent(
+      request("Make a 30 second performance video showing a runner improving their sprint technique."),
+      ctx(),
+    );
+
+    expect(productIntent.format).toBe("cinematic_ad");
+    expect(genericAudioIntent.format).toBe("general");
+    expect(sportsIntent.format).toBe("general");
   });
 
   it("maps a TikTok smart-water-bottle ad to UGC conversion with product proof beats", () => {
@@ -345,6 +403,39 @@ describe("creative intent plan validation", () => {
     expect(issues.join(" ")).toContain("repeat the same reminder/notification product proof");
   });
 
+  it("does not apply product-proof repetition rules to a non-product creator skit", () => {
+    const req = request(
+      "Create an 8 second POV short-form skit about working until 2 a.m. beside an empty coffee cup.",
+      { duration_seconds: 8 },
+    );
+    const intent = inferCreativeIntent(req, ctx());
+    const issues = validatePlanForCreativeIntent(
+      plan({
+        title: "Still Working at 2 A.M.",
+        narration: "I ignored the clock, and now it is somehow two in the morning.",
+        visual_bible: "Raw handheld creator skit at one messy desk under laptop light.",
+        scenes: [
+          scene("scene_1", {
+            narration: "I saw the late reminder and told myself one more minute.",
+            image_prompt: "A tired creator at a messy desk noticing a clock reminder beside an empty coffee cup.",
+            video_prompt: "Handheld push toward the creator noticing the late hour.",
+            duration_seconds: 4,
+          }),
+          scene("scene_2", {
+            narration: "Then another notification popped up and I realized it was two a.m.",
+            image_prompt: "The same creator reacting to the laptop notification at the same messy desk.",
+            video_prompt: "The creator slowly looks from the laptop toward the camera in disbelief.",
+            duration_seconds: 4,
+          }),
+        ],
+      }),
+      intent,
+      req,
+    );
+
+    expect(issues.join(" ")).not.toContain("product proof");
+  });
+
   it("rejects repeated spoken lines across different scenes", () => {
     const req = request("Make a TikTok UGC ad for AeroBottle with closeups and a CTA.", { duration_seconds: 30 });
     const intent = inferCreativeIntent(req, ctx());
@@ -435,16 +526,68 @@ describe("creative intent plan validation", () => {
     ).toEqual([]);
   });
 
-  it("rejects narration that leaks visual directions or schema words", () => {
-    const req = request("Make a TikTok UGC ad for AeroBottle.", { duration_seconds: 30 });
-    const intent = inferCreativeIntent(req, ctx());
-    const issues = validatePlanForCreativeIntent(
-      plan({ scenes: [scene("scene_1", { narration: "Close-up shot of the bottle, image_prompt goes here." })] }),
-      intent,
-      req,
-    );
+  it.each([
+    {
+      name: "narration that leaks visual directions or schema words",
+      prompt: "Make a TikTok UGC ad for AeroBottle.",
+      planOverrides: {
+        scenes: [scene("scene_1", { narration: "Close-up shot of the bottle, image_prompt goes here." })],
+      },
+      expectedIssue: "visual directions or schema words",
+    },
+    {
+      name: "detached third-person UGC narration when the creator should be speaking",
+      prompt: "Make a TikTok UGC ad for AeroBottle that feels like a normal person filming.",
+      planOverrides: {
+        scenes: [
+          scene("scene_1", {
+            narration: "The creator keeps it beside their laptop and they remember to drink more water.",
+          }),
+        ],
+      },
+      expectedIssue: "creator's point of view",
+    },
+    {
+      name: "multi-panel keyframes before provider calls",
+      prompt: "Make a TikTok UGC ad for AeroBottle.",
+      planOverrides: {
+        scenes: [
+          scene("scene_1", {
+            image_prompt: "A split-screen before and after layout with three stacked panels of the creator and product.",
+          }),
+          scene("scene_2"),
+          scene("scene_3"),
+        ],
+      },
+      expectedIssue: "single full-frame keyframe",
+    },
+    {
+      name: "product-lineup keyframes before provider calls",
+      prompt: "Make a TikTok UGC ad for AeroBottle.",
+      planOverrides: {
+        scenes: [
+          scene("scene_1", { image_prompt: "A lineup of different smart water bottle variants across a desk." }),
+          scene("scene_2"),
+          scene("scene_3"),
+        ],
+      },
+      expectedIssue: "one primary product instance",
+    },
+    {
+      name: "bracketed performance cues in UGC spoken narration",
+      prompt: "Make a TikTok UGC ad for AeroBottle.",
+      planOverrides: {
+        scenes: [
+          scene("scene_1", { narration: "[energetic] I kept forgetting water until this thing blinked at me." }),
+        ],
+      },
+      expectedIssue: "bracketed performance cues",
+    },
+  ])("rejects $name", ({ prompt, planOverrides, expectedIssue }) => {
+    const req = request(prompt, { duration_seconds: 30 });
+    const issues = validatePlanForCreativeIntent(plan(planOverrides), inferCreativeIntent(req, ctx()), req);
 
-    expect(issues.join(" ")).toContain("visual directions or schema words");
+    expect(issues.join(" ")).toContain(expectedIssue);
   });
 
   it("rejects meta planning language that would sound nonsensical as voiceover", () => {
@@ -473,26 +616,6 @@ describe("creative intent plan validation", () => {
     expect(issues.join(" ")).toContain("meta planning language");
   });
 
-  it("rejects detached third-person UGC narration when the creator should be speaking", () => {
-    const req = request("Make a TikTok UGC ad for AeroBottle that feels like a normal person filming.", {
-      duration_seconds: 30,
-    });
-    const intent = inferCreativeIntent(req, ctx());
-    const issues = validatePlanForCreativeIntent(
-      plan({
-        scenes: [
-          scene("scene_1", {
-            narration: "The creator keeps it beside their laptop and they remember to drink more water.",
-          }),
-        ],
-      }),
-      intent,
-      req,
-    );
-
-    expect(issues.join(" ")).toContain("creator's point of view");
-  });
-
   it("requires on-camera talking only for explicit visible speech requests", () => {
     const req = request('Make a TikTok UGC ad where the creator says "I forgot water again."', {
       duration_seconds: 30,
@@ -518,46 +641,6 @@ describe("creative intent plan validation", () => {
     );
 
     expect(issues.join(" ")).toContain("explicit visible-speaker");
-  });
-
-  it("rejects multi-panel keyframes before provider calls", () => {
-    const req = request("Make a TikTok UGC ad for AeroBottle.", { duration_seconds: 30 });
-    const intent = inferCreativeIntent(req, ctx());
-    const issues = validatePlanForCreativeIntent(
-      plan({
-        scenes: [
-          scene("scene_1", {
-            image_prompt: "A split-screen before and after layout with three stacked panels of the creator and product.",
-          }),
-          scene("scene_2"),
-          scene("scene_3"),
-        ],
-      }),
-      intent,
-      req,
-    );
-
-    expect(issues.join(" ")).toContain("single full-frame keyframe");
-  });
-
-  it("rejects product-lineup keyframes before provider calls", () => {
-    const req = request("Make a TikTok UGC ad for AeroBottle.", { duration_seconds: 30 });
-    const intent = inferCreativeIntent(req, ctx());
-    const issues = validatePlanForCreativeIntent(
-      plan({
-        scenes: [
-          scene("scene_1", {
-            image_prompt: "A lineup of different smart water bottle variants across a desk.",
-          }),
-          scene("scene_2"),
-          scene("scene_3"),
-        ],
-      }),
-      intent,
-      req,
-    );
-
-    expect(issues.join(" ")).toContain("one primary product instance");
   });
 
   it("rejects a vibe that does not fit the inferred format", () => {
@@ -611,20 +694,6 @@ describe("creative intent plan validation", () => {
     );
 
     expect(issues.join(" ")).toContain("first-person and creator-native");
-  });
-
-  it("rejects bracketed performance cues in UGC spoken narration", () => {
-    const req = request("Make a TikTok UGC ad for AeroBottle.", { duration_seconds: 30 });
-    const intent = inferCreativeIntent(req, ctx());
-    const issues = validatePlanForCreativeIntent(
-      plan({
-        scenes: [scene("scene_1", { narration: "[energetic] I kept forgetting water until this thing blinked at me." })],
-      }),
-      intent,
-      req,
-    );
-
-    expect(issues.join(" ")).toContain("bracketed performance cues");
   });
 
   it("rejects long UGC plans with too little spoken copy for the runtime", () => {
@@ -901,6 +970,13 @@ describe("draftVideoPlanImpl pre-provider repair gate", () => {
 
     expect(first.validation_failed).toBe(true);
     expect(first.next_tools).toEqual(["draft_video_plan"]);
+    expect(first.readiness).toEqual(
+      expect.objectContaining({
+        status: "repair_required",
+        provider_calls_allowed: false,
+        next_actions: [expect.objectContaining({ safe_to_auto_run: true, requires_provider_call: false })],
+      }),
+    );
     expect(String(first.message)).toContain("Focused repair rules:");
     expect(String(first.message)).not.toContain("For 40-60s UGC/product ads");
     expect(readJsonArtifact(projectCtx, "plan", null)).toBeNull();
@@ -927,6 +1003,7 @@ describe("draftVideoPlanImpl pre-provider repair gate", () => {
     const spoken = savedPlan?.scenes.map((item) => item.narration).join(" ") ?? "";
 
     expect(result.validation_failed, JSON.stringify(result, null, 2)).not.toBe(true);
+    expect(result.readiness).toEqual(expect.objectContaining({ status: "ready", provider_calls_allowed: true }));
     expect(savedPlan?.scenes.reduce((sum, item) => sum + item.duration_seconds, 0)).toBe(60);
     expect(savedPlan?.scenes.every((item) => item.on_camera === false)).toBe(true);
     expect(spoken).not.toMatch(/the proof matters|ending should feel|benefit is easy to understand|product feels useful/i);

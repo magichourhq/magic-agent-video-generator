@@ -15,6 +15,7 @@ export type CreativeFormat =
   | "founder_story"
   | "comparison"
   | "cinematic_ad"
+  | "music_video"
   | "tutorial"
   | "youtube_clips";
 export type CreativePlatform = "tiktok" | "reels" | "shorts" | "web" | "general";
@@ -85,10 +86,13 @@ const NON_COMPARATIVE_INSTEAD =
   /\binstead of (?:repeating|reusing|showing|using|adding|creating|forcing|defaulting|making)\b/i;
 const EXPLICIT_NO_SPEECH =
   /\b(no|without)\s+(?:narration|voiceover|dialogue|spoken words?|speech)\b|\b(?:music|ambience|ambient sound)\s+only\b/i;
+const EXPLICIT_NARRATION = /\b(?:voice[- ]?over|narration|narrator)\b/i;
 const TUTORIAL = /\b(tutorial|how to|step[- ]?by[- ]?step|walkthrough|teach|explain how)\b/i;
 const FOUNDER = /\b(founder|startup|our story|why we built|behind the scenes)\b/i;
 const TESTIMONIAL = /\b(testimonial|review|customer|i tried|my experience|honest take)\b/i;
 const CINEMATIC = /\b(cinematic|polished|commercial|story commercial|brand film|dramatic|hero shot)\b/i;
+const EXPLICIT_MUSIC_VIDEO =
+  /\b(?:music video|song visualizer|music visualizer|performance video (?:for|to) (?:my|this|the) (?:song|track)|video (?:for|to) (?:my|this|the) (?:song|track)|visuals? (?:for|to) (?:my|this|the) (?:song|track))\b/i;
 const EXPLICIT_EDIT_REQUEST =
   /(?:\b(?:edit|change|replace|regenerate|trim|speed up|slow down)\b.{0,48}\b(?:video|scene|clip|shot|audio|voiceover|narration)\b)|(?:\b(?:video|scene|clip|shot|audio|voiceover|narration)\b.{0,48}\b(?:edit|change|replace|regenerate|trim|speed up|slow down)\b)/i;
 const VISUAL_DIRECTION = /\b(show|include|close[- ]?ups?|caption|captions|subtitles?|b[- ]?roll|camera|scene|shot|visual|reveal)\b/i;
@@ -205,6 +209,7 @@ function textFor(request: CreateProjectRequest): string {
 function inferVideoVibe(format: CreativeFormat, platform: CreativePlatform, goal: CreativeGoal, text: string): VideoVibe {
   if (/\b(high energy|fast paced|snappy|scroll[- ]?stopping|viral)\b/i.test(text)) return "high_energy_social";
   if (/\b(cozy|warm|study|desk setup|soft light|calm|useful)\b/i.test(text)) return "cozy_lifestyle";
+  if (format === "music_video") return "cinematic_commercial";
   if (format === "founder_story") return "founder_explainer";
   if (format === "tutorial") return "tutorial_walkthrough";
   if (format === "cinematic_ad") return "cinematic_commercial";
@@ -221,6 +226,7 @@ export function inferCreativeIntent(request: CreateProjectRequest, ctx: ProjectC
   const explicitlyNoSpeech = EXPLICIT_NO_SPEECH.test(text);
   let format: CreativeFormat = "general";
   if (workflow === "youtube_clips") format = "youtube_clips";
+  else if (EXPLICIT_MUSIC_VIDEO.test(text)) format = "music_video";
   else if (FOUNDER.test(text)) format = "founder_story";
   else if (TESTIMONIAL.test(text)) format = "testimonial";
   else if (comparisonIntent) format = "comparison";
@@ -242,6 +248,8 @@ export function inferCreativeIntent(request: CreateProjectRequest, ctx: ProjectC
 
   const goal: CreativeGoal = EXPLICIT_EDIT_REQUEST.test(text)
     ? "edit"
+    : format === "music_video"
+      ? "story"
     : CTA.test(text) || /\b(ad|commercial|strong ending)\b/i.test(text)
       ? "conversion"
       : TUTORIAL.test(text)
@@ -252,9 +260,13 @@ export function inferCreativeIntent(request: CreateProjectRequest, ctx: ProjectC
             ? "story"
             : "awareness";
 
-  const creatorDriven = CREATOR_STYLE.test(text) || ["ugc", "testimonial", "founder_story"].includes(format);
+  const creatorDriven =
+    format !== "music_video" &&
+    (CREATOR_STYLE.test(text) || ["ugc", "testimonial", "founder_story"].includes(format));
   const wantsSpokenTrack = /\b(ad|commercial|voiceover|narration|narrate|say|voice|talk|speaking)\b/i.test(text);
-  const speech_mode: CreativeSpeechMode = QUOTED_SPEECH.test(request.prompt)
+  const speech_mode: CreativeSpeechMode = format === "music_video" && !EXPLICIT_NARRATION.test(text)
+    ? "mostly_visual"
+    : QUOTED_SPEECH.test(request.prompt)
     ? "quoted_user_speech"
     : explicitlyNoSpeech
       ? "mostly_visual"
@@ -269,11 +281,11 @@ export function inferCreativeIntent(request: CreateProjectRequest, ctx: ProjectC
             : "mostly_visual";
 
   const required_beats = uniqueBeats([
-    ...(creatorDriven || platform === "tiktok" || platform === "reels" || platform === "shorts"
+    ...(format !== "music_video" && (creatorDriven || platform === "tiktok" || platform === "reels" || platform === "shorts")
       ? (["hook"] as RequiredBeat[])
       : []),
     ...(creatorDriven ? (["creator_reaction"] as RequiredBeat[]) : []),
-    ...(PRODUCT.test(text) || ["product_demo", "problem_solution", "comparison", "cinematic_ad"].includes(format)
+    ...(format !== "music_video" && (PRODUCT.test(text) || ["product_demo", "problem_solution", "comparison", "cinematic_ad"].includes(format))
       ? (["product_proof", "payoff_cta"] as RequiredBeat[])
       : []),
     ...(format === "problem_solution" || format === "product_demo" || format === "comparison" || format === "tutorial"
@@ -285,7 +297,9 @@ export function inferCreativeIntent(request: CreateProjectRequest, ctx: ProjectC
   const creatorOrProductVideo = creatorDriven || format === "product_demo" || format === "problem_solution" || format === "comparison";
   const preferredSceneCount =
     request.scene_count ??
-    (duration >= 30
+    (format === "music_video"
+      ? Math.ceil(duration / 7)
+      : duration >= 30
       ? Math.ceil(duration / (creatorOrProductVideo ? 9 : 12))
       : duration >= 20
         ? 3
@@ -318,13 +332,17 @@ export function creativeIntentBrief(intent: CreativeIntent): string {
     ? [...supportedDurations].sort((a, b) => a - b).join(", ")
     : "selected-model supported values";
   const speechStyle =
-    intent.format === "ugc" || intent.format === "testimonial" || intent.format === "founder_story"
+    intent.format === "music_video"
+      ? "use the supplied song or track as the master audio; do not convert lyrics into TTS, and add separate narration only when the user explicitly requests it"
+      : intent.format === "ugc" || intent.format === "testimonial" || intent.format === "founder_story"
       ? "creator-native: first-person, casual, specific, lightly imperfect, and free of announcer/ad-copy phrases"
       : intent.speech_mode === "voiceover"
         ? "natural voiceover: clear, compact, human, and non-corporate"
         : "minimal spoken copy unless the user clearly wants narration";
   const voiceEmotionTarget =
-    intent.format === "ugc" || intent.format === "testimonial"
+    intent.format === "music_video"
+      ? "follow the explicitly described musical mood and performance arc; use a separate narrator only when explicitly requested"
+      : intent.format === "ugc" || intent.format === "testimonial"
       ? "creator-native emotion with a distinct hook, proof emphasis, and satisfied payoff"
       : intent.format === "cinematic_ad"
         ? "polished emotional arc with restraint and no announcer voice"
@@ -334,7 +352,9 @@ export function creativeIntentBrief(intent: CreativeIntent): string {
             ? "clear confidence and slightly impressed product-proof delivery"
             : "natural delivery that follows each scene's emotional beat";
   const formatGrammar =
-    intent.format === "ugc" || intent.format === "testimonial"
+    intent.format === "music_video"
+      ? "Music-video grammar: use the supplied song or track as the master audio, maintain one coherent performer/world/style bible, and progress through visually distinct performance, narrative, or atmospheric beats that follow only the sections the user explicitly describes. Do not infer lyrics, vocal timing, lip-sync, or instrumental boundaries that have not been analyzed. Do not apply UGC hook/proof/CTA grammar."
+      : intent.format === "ugc" || intent.format === "testimonial"
       ? "UGC/testimonial grammar: creator-native opening, visible reaction or lived problem, product proof in action, and a creator-native payoff. Do not make non-UGC formats follow this grammar."
       : intent.format === "founder_story"
         ? "Founder grammar: human problem insight, why-it-exists context, product proof, and grounded founder payoff."
@@ -367,6 +387,7 @@ export function creativeIntentBrief(intent: CreativeIntent): string {
     "- Runtime rule: scene durations should cover the requested total, and talking-scene coverage is based on actual spoken length, not the nominal scene duration.",
     "- B-roll speech rule: do not place one short sentence at the start of a long b-roll scene; the voiceover should cover most of the beat, or the scene should be split/shortened before rendering.",
     "- Product proof rule: product b-roll must show use, reminder, feature, result, or reaction, not just logo/design beauty shots.",
+    "- Short product-UGC ending rule: if the request is 15 seconds or shorter, the final beat must explicitly show the immediate result of the demonstrated use and the creator's satisfied, surprised, or relieved reaction. A spoken sales CTA is not required unless the user asks for one.",
     "- Scene progression rule: adjacent scenes must advance distinct story beats. Do not repeat the same product action, reminder, app/proof, reaction, or payoff in different words.",
     "- Explicit ending-speech rule: when the request says the ending narration/voiceover must explain a fact or claim, include that claim in the final scene narration; do not replace it with a nearby detail.",
     "- UGC dialogue should be short enough to say naturally; prefer one casual sentence per scene over packed ad copy.",
@@ -421,7 +442,7 @@ function sceneBeatText(plan: VideoPlan, index: number): string {
 function repeatedAdjacentBeatIssues(plan: VideoPlan, intent: CreativeIntent): string[] {
   if (
     !intent.required_beats.some((beat) => beat === "product_proof" || beat === "broll_demo") &&
-    !["ugc", "testimonial", "product_demo", "problem_solution", "comparison"].includes(intent.format)
+    !["product_demo", "problem_solution", "comparison"].includes(intent.format)
   ) {
     return [];
   }
@@ -574,7 +595,7 @@ export function validatePlanForCreativeIntent(
       .map((scene) => `${scene.narration} ${scene.image_prompt} ${scene.video_prompt}`)
       .join(" ");
     if (!PAYOFF.test(ending) && !CTA.test(ending)) {
-      issues.push("The inferred product/commercial goal requires a final payoff, result reveal, or CTA.");
+      issues.push("The inferred product/commercial goal requires a final payoff, result reveal, or CTA. For short product UGC, make the final scene explicitly show the result of the demonstrated use and the creator's satisfied, surprised, or relieved reaction; a spoken sales CTA is optional.");
     }
   }
   if (finalSeconds >= 30 && plan.scenes.length > 1) {

@@ -1,6 +1,12 @@
 import { describe, it, expect } from "vitest";
 import { context } from "../src/projectContext.js";
-import { CreateProjectRequestSchema, SceneSchema, VideoPlanSchema } from "../src/schemas.js";
+import {
+  CreateProjectRequestSchema,
+  MAGIC_VIDEO_MODEL_DURATIONS,
+  MAGIC_VIDEO_MODEL_RESOLUTIONS,
+  SceneSchema,
+  VideoPlanSchema,
+} from "../src/schemas.js";
 
 const baseScene = { id: "s1", narration: "hi", image_prompt: "p", video_prompt: "v", duration_seconds: 4, on_camera: true };
 
@@ -16,6 +22,8 @@ describe("SceneSchema on_camera", () => {
     const scene = SceneSchema.parse({ ...baseScene, on_camera: false });
     expect(scene.audio_mode).toBe(null);
     expect(scene.audio_note).toBe(null);
+    expect(scene.audio_source).toBe(null);
+    expect(scene.native_audio_prompt).toBe(null);
   });
   it("accepts compact audio mode and short voice note", () => {
     const scene = SceneSchema.parse({
@@ -36,6 +44,17 @@ describe("SceneSchema on_camera", () => {
   });
   it("rejects unknown audio modes", () => {
     expect(() => SceneSchema.parse({ ...baseScene, audio_mode: "raw_hume_temperature" })).toThrow();
+  });
+  it("accepts explicit native H3 audio ownership", () => {
+    const scene = SceneSchema.parse({
+      ...baseScene,
+      narration: "",
+      on_camera: false,
+      audio_source: "native_scene_audio",
+      native_audio_prompt: "City traffic, footsteps, and a distant horn.",
+    });
+    expect(scene.audio_source).toBe("native_scene_audio");
+    expect(scene.native_audio_prompt).toContain("footsteps");
   });
 });
 
@@ -70,6 +89,17 @@ describe("VideoPlanSchema voice", () => {
 });
 
 describe("CreateProjectRequestSchema audio provider", () => {
+  it("defaults video generation to MiniMax H3 with its supported provider constraints", () => {
+    const request = CreateProjectRequestSchema.parse({ prompt: "Make a cinematic vertical story." });
+    const ctx = context("0123456789abcdef0123456789abcdef", request);
+
+    expect(ctx.video_model).toBe("minimax-h3");
+    expect(MAGIC_VIDEO_MODEL_DURATIONS[ctx.video_model]).toEqual(
+      new Set([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 15, 20, 25, 30]),
+    );
+    expect(MAGIC_VIDEO_MODEL_RESOLUTIONS[ctx.video_model]).toEqual(new Set(["480p", "720p", "1080p"]));
+  });
+
   it("defaults image generation to Nano Banana 2 Lite at a supported resolution", () => {
     const request = CreateProjectRequestSchema.parse({
       prompt: "Make a polished vertical product video.",

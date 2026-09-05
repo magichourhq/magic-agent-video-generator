@@ -2,12 +2,18 @@ import { mkdtempSync, rmSync } from "node:fs";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ProjectContext } from "../src/context.js";
-import { PROJECT_CONTEXT_DEFAULTS } from "../src/context.js";
 // `withMediaUrl` (called at the end of the recovery impls) rejects asset paths
 // outside OUTPUT_DIR, so the temp project dir must live under it.
 import { OUTPUT_DIR } from "../src/config.js";
-import type { Scene, VideoPlan } from "../src/schemas.js";
+import type { Scene } from "../src/schemas.js";
 import { FISH_AUDIO_VOICES } from "../src/voices.js";
+import {
+  makeScene,
+  seedPlanImagesVideos,
+  silentClipFor,
+  talkingClipFor,
+  testContext,
+} from "./helpers/testFixtures.js";
 
 // --- media.ts mock --------------------------------------------------------
 // The recovery tools (`retrySceneWithModelsImpl` / `regenerateSceneImpl`) must
@@ -37,107 +43,12 @@ vi.mock("../src/media.js", async () => {
 const { retrySceneWithModelsImpl, regenerateSceneImpl, generateSceneImagesImpl } = await import("../src/workflows.js");
 const { initializeProjectState, readJsonArtifact, updateProjectState, writeJsonArtifact } = await import("../src/renderState.js");
 
-function makeScene(overrides: Partial<Scene> & Pick<Scene, "id">): Scene {
-  return {
-    narration: "",
-    image_prompt: "an image",
-    video_prompt: "a video",
-    duration_seconds: 2,
-    on_camera: true,
-    audio_mode: "ugc_casual",
-    audio_note: null,
-    reference_media_ids: [],
-    continuity: {
-      story_beat: "",
-      required_subjects: [],
-      opening_state: "",
-      closing_state: "",
-      setting: "",
-      screen_direction: "not_applicable",
-    },
-    ...overrides,
-  };
-}
-
-function testContext(projectDir: string): ProjectContext {
-  return {
-    project_id: "workflows-retry-test",
-    project_dir: projectDir,
-    aspect_ratio: "16:9",
-    resolution: "720p",
-    ...PROJECT_CONTEXT_DEFAULTS,
-  };
-}
-
-function seedPlanImagesVideos(
-  ctx: ProjectContext,
-  scenes: Scene[],
-  planOverrides: Partial<Pick<VideoPlan, "voice" | "visual_bible">> = {},
-): void {
-  const plan: VideoPlan = {
-    title: "Test plan",
-    creative_vibe: "polished_ugc",
-    narration: "overall narration",
-    visual_bible: "",
-    scenes,
-    voice: null,
-    ...planOverrides,
-  };
-  writeJsonArtifact(ctx, "plan", plan);
-  const images = scenes.map((scene) => ({
-    scene_id: scene.id,
-    path: path.join(ctx.project_dir, "images", `${scene.id}.png`),
-    prompt: scene.image_prompt,
-    model: ctx.image_model,
-    resolution: ctx.image_resolution,
-    style_tool: ctx.image_style_tool,
-    provider_job_id: null,
-    provider_url: null,
-  }));
-  writeJsonArtifact(ctx, "images", images);
-  // Pre-existing silent clips (the broken/transient render we are retrying).
-  const videos = scenes.map((scene) => silentClipFor(ctx, scene));
-  writeJsonArtifact(ctx, "videos", videos);
-}
-
-function silentClipFor(ctx: ProjectContext, scene: Scene) {
-  return {
-    scene_id: scene.id,
-    path: path.join(ctx.project_dir, "videos", `${scene.id}.mp4`),
-    prompt: scene.video_prompt,
-    model: ctx.video_model,
-    resolution: ctx.resolution,
-    audio: false,
-    duration_seconds: scene.duration_seconds,
-    provider_job_id: null,
-    provider_url: null,
-  };
-}
-
-function talkingClipFor(ctx: ProjectContext, scene: Scene, audioPath: string, audioDuration: number) {
-  return {
-    scene_id: scene.id,
-    path: path.join(ctx.project_dir, "videos", scene.id, "talking", "talking.mp4"),
-    prompt: scene.video_prompt,
-    model: "ai-talking-photo",
-    resolution: ctx.resolution,
-    audio: true,
-    duration_seconds: audioDuration,
-    provider_job_id: "talk1",
-    provider_url: null,
-    has_embedded_audio: true,
-    on_camera: true,
-    audio_path: audioPath,
-    audio_duration_seconds: audioDuration,
-  };
-}
-
 let projectDir: string;
 let ctx: ProjectContext;
 
 beforeEach(() => {
   projectDir = mkdtempSync(path.join(OUTPUT_DIR, "workflows-retry-"));
-  ctx = testContext(projectDir);
+  ctx = testContext(projectDir, "workflows-retry-test");
   generateTalkingClip.mockReset();
   generateVideoAsset.mockReset();
   generateSceneVoiceovers.mockReset();

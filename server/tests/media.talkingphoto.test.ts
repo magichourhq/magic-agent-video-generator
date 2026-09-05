@@ -4,8 +4,7 @@ import path from "node:path";
 import { execa } from "execa";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ProjectContext } from "../src/context.js";
-import { PROJECT_CONTEXT_DEFAULTS } from "../src/context.js";
-import type { Scene } from "../src/schemas.js";
+import { makeScene, makeSilentVideo, makeTone, testContext as createTestContext } from "./helpers/testFixtures.js";
 
 // Mock the Magic Hour SDK boundary. `media.ts` constructs `new Client(...)`
 // inside the module-private `magicHourClient(ctx)`, so stubbing the `Client`
@@ -23,34 +22,6 @@ vi.mock("magic-hour", () => {
 // Imported AFTER vi.mock so the mocked `magic-hour` is wired in.
 const { generateTalkingClip } = await import("../src/media.js");
 
-async function makeSilentVideo(pathname: string, seconds: number) {
-  await execa("ffmpeg", [
-    "-y",
-    "-f",
-    "lavfi",
-    "-i",
-    `color=c=black:s=320x180:d=${seconds}:r=30`,
-    "-c:v",
-    "libx264",
-    "-pix_fmt",
-    "yuv420p",
-    pathname,
-  ]);
-}
-
-async function makeTone(pathname: string, seconds: number) {
-  await execa("ffmpeg", [
-    "-y",
-    "-f",
-    "lavfi",
-    "-i",
-    `sine=frequency=440:duration=${seconds}`,
-    "-c:a",
-    "mp3",
-    pathname,
-  ]);
-}
-
 async function makeImage(pathname: string) {
   await execa("ffmpeg", [
     "-y",
@@ -65,35 +36,7 @@ async function makeImage(pathname: string) {
 }
 
 function testContext(projectDir: string): ProjectContext {
-  return {
-    project_id: "media-talkingphoto-test",
-    project_dir: projectDir,
-    aspect_ratio: "16:9",
-    resolution: "720p",
-    ...PROJECT_CONTEXT_DEFAULTS,
-  };
-}
-
-function makeScene(overrides: Partial<Scene> & Pick<Scene, "id">): Scene {
-  return {
-    narration: "",
-    image_prompt: "",
-    video_prompt: "",
-    duration_seconds: 2,
-    on_camera: true,
-    audio_mode: "ugc_casual",
-    audio_note: null,
-    reference_media_ids: [],
-    continuity: {
-      story_beat: "",
-      required_subjects: [],
-      opening_state: "",
-      closing_state: "",
-      setting: "",
-      screen_direction: "not_applicable",
-    },
-    ...overrides,
-  };
+  return createTestContext(projectDir, "media-talkingphoto-test");
 }
 
 describe("generateTalkingClip", () => {

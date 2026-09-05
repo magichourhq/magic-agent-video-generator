@@ -24,6 +24,8 @@ function scene(id: string, overrides: Partial<VideoPlan["scenes"][number]> = {})
     video_prompt: "Slow handheld push in while the creator smiles.",
     duration_seconds: 8,
     on_camera: true,
+    audio_source: null,
+    native_audio_prompt: null,
     audio_mode: "ugc_casual",
     audio_note: null,
     reference_media_ids: [],
@@ -78,6 +80,15 @@ describe("validateProductionVideoPlan", () => {
     });
 
     expect(validateProductionVideoPlan(testPlan).join(" ")).not.toContain("mid-thought");
+  });
+
+  it("rejects narration that ends on an unfinished connective", () => {
+    const testPlan = plan({
+      narration: "A year later, Joseph was walking from",
+      scenes: [scene("scene_1", { narration: "A year later, Joseph was walking from" })],
+    });
+
+    expect(validateProductionVideoPlan(testPlan).join(" ")).toContain("mid-thought");
   });
 
   it("grounds every declared continuity subject in the normalized keyframe prompt", () => {
@@ -375,68 +386,39 @@ describe("validateProductionVideoPlan", () => {
     expect(issues.join(" ")).not.toContain("creator-native CTA");
   });
 
-  it("rejects narration that leaks camera or visual directions into spoken copy", () => {
+  it.each([
+    {
+      name: "narration that leaks camera or visual directions into spoken copy",
+      sceneOverrides: { narration: "Close-up of the bottle on the desk while the camera pans." },
+      expectedIssue: "visual/camera instructions",
+    },
+    {
+      name: "meta planning language in spoken narration",
+      sceneOverrides: {
+        narration: "The proof matters because the reminder is simple and the ending should feel useful.",
+      },
+      expectedIssue: "meta planning language",
+    },
+    {
+      name: "image prompts that ask for storyboard or split-frame layouts",
+      sceneOverrides: {
+        image_prompt: "A three-panel storyboard showing the creator before and after using AeroBottle.",
+      },
+      expectedIssue: "split-screen, collage, storyboard, or multiple views",
+    },
+    {
+      name: "image prompts that ask for multiple competing product instances",
+      sceneOverrides: {
+        image_prompt: "A row of serum bottles and different product variants on a bathroom shelf.",
+      },
+      expectedIssue: "multiple competing product instances",
+    },
+  ])("rejects $name", ({ sceneOverrides, expectedIssue }) => {
     const issues = validateProductionVideoPlan(
-      plan({
-        scenes: [
-          scene("scene_1", {
-            narration: "Close-up of the bottle on the desk while the camera pans.",
-          }),
-          scene("scene_2"),
-          scene("scene_3"),
-        ],
-      }),
+      plan({ scenes: [scene("scene_1", sceneOverrides), scene("scene_2"), scene("scene_3")] }),
     );
 
-    expect(issues.join(" ")).toContain("visual/camera instructions");
-  });
-
-  it("rejects meta planning language in spoken narration", () => {
-    const issues = validateProductionVideoPlan(
-      plan({
-        scenes: [
-          scene("scene_1", {
-            narration: "The proof matters because the reminder is simple and the ending should feel useful.",
-          }),
-          scene("scene_2"),
-          scene("scene_3"),
-        ],
-      }),
-    );
-
-    expect(issues.join(" ")).toContain("meta planning language");
-  });
-
-  it("rejects image prompts that ask for storyboard or split-frame layouts", () => {
-    const issues = validateProductionVideoPlan(
-      plan({
-        scenes: [
-          scene("scene_1", {
-            image_prompt: "A three-panel storyboard showing the creator before and after using AeroBottle.",
-          }),
-          scene("scene_2"),
-          scene("scene_3"),
-        ],
-      }),
-    );
-
-    expect(issues.join(" ")).toContain("split-screen, collage, storyboard, or multiple views");
-  });
-
-  it("rejects image prompts that ask for multiple competing product instances", () => {
-    const issues = validateProductionVideoPlan(
-      plan({
-        scenes: [
-          scene("scene_1", {
-            image_prompt: "A row of serum bottles and different product variants on a bathroom shelf.",
-          }),
-          scene("scene_2"),
-          scene("scene_3"),
-        ],
-      }),
-    );
-
-    expect(issues.join(" ")).toContain("multiple competing product instances");
+    expect(issues.join(" ")).toContain(expectedIssue);
   });
 
   it("rejects longer videos made from repeated sub-3s flashes", () => {

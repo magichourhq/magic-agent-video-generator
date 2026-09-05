@@ -412,7 +412,8 @@ export function magicHourModelCatalogForAgent(): string {
     "- nano-banana-2: higher-cost model with broader image counts and up to 4k.",
     "- nano-banana-pro: highest-cost professional image model at 1k/2k/4k.",
     "Magic Hour image-to-video models:",
-    "- ltx-2.3: default for this app; fast iteration used for b-roll cutaway scenes; supports 1-10/15/20/25/30 second clips and 480p/720p/1080p. On-camera (talking) scenes are NOT rendered by this model; they use a separate AI talking photo pass (keyframe image + the scene's generated TTS line produce the talking video), so keep the animate-step audio flag off.",
+    "- minimax-h3: default for this app; reference-driven video with optional native audio, supports 1-10/15/20/25/30 second clips and 480p/720p/1080p. It accepts a starting image but not an ending image. Enable native audio only for native_scene_audio scenes; keep it off when ElevenLabs voiceover or AI talking photo owns speech.",
+    "- ltx-2.3: fast iteration for b-roll cutaway scenes; supports 1-10/15/20/25/30 second clips and 480p/720p/1080p.",
     "- ltx-2: older fast-iteration LTX option with the same I2V duration and resolution set.",
     "- default: Magic Hour recommended video model; do not use unless the user explicitly asks for Magic Hour's default.",
     "- wan-2.2: fast strong visuals/effects, supports 3-10/15 second clips and 480p/720p/1080p.",
@@ -516,7 +517,7 @@ export function buildGenerationBrief(request: CreateProjectRequest, ctx: Project
       "phrases like 'the proof matters,' 'the ending should feel,' 'this scene shows,' 'benefit is easy to understand,' " +
       "or 'the product feels useful.' Rewrite those as concrete human experience.",
     "First-run production decision contract: decide the format intent before drafting scenes " +
-      "(UGC, product demo, problem-solution, testimonial, founder story, comparison, tutorial, cinematic story, YouTube clips, or general video). " +
+      "(UGC, product demo, problem-solution, testimonial, founder story, comparison, tutorial, cinematic story, explicitly requested music video, YouTube clips, or general video). " +
       "The scene grammar must match that inferred intent; do not force UGC hook/proof/CTA structure onto non-UGC prompts.",
     "Format-specific beat rule: UGC/testimonial/founder prompts need a human creator or reaction beat when the prompt calls for a person. " +
       "Product-demo/problem-solution/comparison prompts need visible proof/demo/closeup and a practical result/payoff. " +
@@ -531,6 +532,7 @@ export function buildGenerationBrief(request: CreateProjectRequest, ctx: Project
     "For 40-60s UGC/product ads, the sum of per-scene narration usually needs to be around 95-140 spoken words, " +
       "with longer b-roll proof beats using fuller VO rather than one tiny sentence.",
     "Voice identity contract: for every narrated single-speaker video, choose one plan-level voice that fits the visible speaker or narrator identity, genre, energy, and emotional tone. Do not reuse one generic default across unrelated projects. Keep the selected provider voice identity stable across every clip inside that video, and vary emotion with audio_mode/audio_note rather than changing speakers. Only change voices when the user explicitly requests multiple speakers, characters, or narrator roles.",
+    "Scene audio ownership contract: set audio_source independently from audio_mode. Use voiceover for ElevenLabs narration over non-speaking footage, speech_driven only for explicitly visible speech/lip-sync, and native_scene_audio for movie-like, action, dialogue, ambience, foley, or music scenes that should keep MiniMax H3's own sound. Never assign two owners to one scene. native_scene_audio must have empty narration and a specific native_audio_prompt; voiceover/speech_driven must keep native_audio_prompt null.",
     "Editable storyboard contract: treat the saved plan, scene images, scene videos, scene voiceovers, timeline clips, and final stitch as separate artifacts. Keep each scene's final attributes independent so a later edit can regenerate or replace one scene without rewriting unrelated scenes.",
     "Run isolation contract: this run may use only the current project's prompt, provider settings, project_state, and artifacts. Never borrow scene text, media paths, voices, or user preferences from another project id or queued generation.",
     "Provider-cost policy: get the plan right before any provider calls. Do not rely on automatic retries, duplicate " +
@@ -1166,7 +1168,6 @@ export function compactProjectStatusForAgent(status: JsonDict | null): JsonDict 
 }
 
 export function buildProjectMessageBrief(
-  projectId: string,
   message: string,
   ctx: ProjectContext,
   status: JsonDict | null,
@@ -1271,8 +1272,10 @@ Quality rules:
   do not depend on automatic rerenders, broad retries, or post-render subjective
   QA to make a mediocre draft acceptable.
 - Decide the creative format explicitly in your planning: day-in-life,
-  problem-solution, product-demo, testimonial, founder-story, comparison, or
-  cinematic story. Use scene order, pacing, and proof beats that fit that format.
+  problem-solution, product-demo, testimonial, founder-story, comparison,
+  cinematic story, or explicitly requested music video. Never infer music-video
+  grammar merely from uploaded audio or a request for background music. Use scene
+  order, pacing, and proof beats that fit the selected format.
 - Choose a creative_vibe explicitly from the VideoPlan schema and make every
   image_prompt and video_prompt fit it. The vibe controls lighting, camera
   energy, realism level, production polish, and creator/product framing.
@@ -1285,6 +1288,15 @@ Quality rules:
   mostly visual requests, and ordinary UGC/product ads, set on_camera=false and
   let narration play as voiceover over b-roll/product/demo footage unless the
   visible-speaker request is explicit.
+- Set audio_source per scene. Use voiceover when one stable ElevenLabs narrator
+  speaks over non-speaking footage. Use speech_driven only with on_camera=true
+  when external TTS must drive visible speech/lip-sync. Use native_scene_audio
+  for movie-like, action, character-dialogue, or atmospheric scenes where
+  MiniMax H3 should generate the dialogue, ambience, foley, and music itself.
+- A scene has exactly one audio owner. For native_scene_audio, leave narration
+  empty and write a precise native_audio_prompt naming audible dialogue,
+  ambience, foley, and music. For voiceover or speech_driven, keep
+  native_audio_prompt null so H3 audio cannot compete with external speech.
 - For 45-70s UGC/product ads without explicit visible speech, use about 5-7
   non-lip-synced scenes with product/demo/result/creator-reaction visuals and
   one consistent voiceover. If the user explicitly asks for on-camera speaking,
@@ -1385,168 +1397,4 @@ Quality rules:
 - If the user's requested scene count conflicts with quality, choose the scene
   count that makes the best final video and explain that choice in the title or
   narration only if needed.
-`.trim();
-
-export const PLANNING_INSTRUCTIONS = `
-You are a senior cinematic art director. Return one complete VideoPlan that
-matches the supplied timing brief. Do not ask clarification questions.
-
-Planning rules:
-- First-run production quality is the priority. The returned plan must be good
-  enough to render as-is without a second model pass, broad retry, or post-render
-  subjective QA loop.
-- Decide the format intent before writing scenes: day-in-life, problem-solution,
-  product-demo, testimonial, founder-story, comparison, or cinematic story. Make
-  the scene sequence match that grammar.
-- Choose creative_vibe before writing scenes and keep all clip prompts inside
-  that visual/story language.
-- Build visual_bible first as the shared world map: recurring identities and
-  wardrobe, important object appearance, fixed geography, time progression,
-  visual medium, palette, lighting, and camera language. It must be complete
-  enough for independent keyframe generations to reconstruct the same world,
-  while remaining at or below 2400 characters.
-- Plan the scene ledgers together as one chronological physical state machine.
-  Every opening_state inherits the prior closing_state unless an explicit time
-  or location bridge changes it. Track position, orientation, possession,
-  contact, direction, and where moving subjects end up.
-- Perform a real-world blocking pass before writing each image/video prompt.
-  Stage one photographable opening instant: identify the support under each
-  body/object, reachable distances, gaze, possession, separation, and existing
-  contact. Then describe one primary cause-action-result sequence with ordinary
-  biomechanics and reaction timing. Objects cannot appear in hands, people
-  cannot cross blocked space, and reactions cannot occur before their trigger.
-- Make the image_prompt the credible pre-action setup and the video_prompt the
-  continuous motion into the observable closing_state. Do not combine setup,
-  action, aftermath, or multiple times/locations into the opening keyframe.
-- Keep gravity, collision, catch, landing, and handoff events atomic. The same
-  scene must show the origin, full path, contact, and secured outcome. Allocate
-  at least eight seconds; for LTX 2.3 choose its supported ten-second duration,
-  never five seconds.
-- The full narration must fit the spoken-word budget in the user brief.
-- Treat the requested runtime as a hard cap. If Hume/voiceover is selected,
-  leave room for natural sentence pauses and avoid many tiny sentence fragments.
-- Narration is spoken TTS copy. It should tell a compact story with
-  character intention, obstacle, change, and payoff.
-- Narration must be speakable copy, not plan commentary. Never write phrases
-  like "the proof matters," "the ending should feel," "this scene shows,"
-  "benefit is easy to understand," or "the product feels useful." Convert those
-  into concrete first-person or narrator lines.
-- For UGC/social/testimonial/founder scenes, narration should sound like a real
-  person speaking off the cuff: first-person, concrete, casual, and slightly
-  imperfect. Prefer "I kept forgetting water until my head hurt" over
-  "AeroBottle helps users stay hydrated and focused."
-- Avoid brand-announcer and corporate phrases in spoken copy: introducing,
-  experience the, say goodbye to, revolutionary, seamless, elevate, unlock,
-  optimize, game-changer, designed to, or in today's fast-paced world.
-- Do not overdo Gen Z slang. A normal creator can say "honestly," "okay wait,"
-  "low-key," or "not gonna lie" when it fits, but the script should still feel
-  like a real human, not a meme compilation.
-- Do not write narration as image prompt prose, not camera direction, and not a production note.
-  Avoid lens, wardrobe, lighting, blocking, and model-facing
-  visual inventory in narration unless it matters to the spoken story.
-- Choose on_camera per scene. Default on_camera=false. Set on_camera=true only
-  when the user explicitly requested an on-screen creator, person, character, or
-  avatar speaking/saying/talking/lip-syncing that scene's dialogue. Set
-  on_camera=false for product proof, screen, cinematic, tutorial, ordinary UGC,
-  or other b-roll/demo footage whose narration should play as voiceover.
-- Scene narrations should be compact, but duration-aware. on_camera scenes are
-  first-person dialogue and need NOT read as one continuous third-person VO.
-  For UGC/product ads, keep most on_camera scenes around 5-8s unless the line
-  has enough natural words to fill a longer talking clip.
-  B-roll-cutaway (on_camera=false) narrations are voiceover and should combine
-  cleanly and read as VO. For 10-15s b-roll proof scenes, write two or three
-  natural spoken sentences when needed so speech does not end in the first few
-  seconds.
-- Do not make a long b-roll/product scene with only a tiny spoken line at the
-  beginning. If a b-roll scene is 10s or longer and carries voiceover, write
-  enough natural VO to cover most of the beat, split it into shorter proof
-  beats, or choose a shorter supported duration. As a rough guide, a 10s b-roll
-  voiceover usually needs about 20-30 spoken words and a 15s b-roll voiceover
-  usually needs about 32-45 spoken words. Do not leave more than a few seconds
-  of silence after the spoken line.
-- For UGC/social/testimonial/founder prompts, include at least one
-  creator/reaction beat. For product/commercial prompts, include at least one
-  visible proof/demo/closeup/result beat and one payoff or creator-native CTA
-  beat near the end.
-- Let narrative complexity choose scene count within nonlinear bands: usually
-  3-5 scenes at 15s or less, 4-8 at 16-30s, 5-10 at 31-60s, and 6-10 above 60s.
-  A 30s story may use up to 8 purposeful cuts. Use at most one sub-3s beat.
-- Keep each scene's narration short enough for its own duration; do not cram a
-  long paragraph into one scene.
-- The ordered per-scene narration fields are the canonical spoken script for
-  every format. plan.narration must be their exact concatenation in the same
-  order, not a summary, paraphrase, or second version. Count the scene fields,
-  because those exact words are sent to TTS.
-- Set voice to the catalog key whose gender and energy best match the on-screen
-  character in the visual bible: sarah (female, soft/conversational),
-  jasphina (female, energetic), ethan (male, calm/professional),
-  energetic_male (male, enthusiastic), alle (neutral). Pick a female voice for a
-  female character and a male voice for a male character.
-- Set audio_mode per scene: ugc_hook for opening creator hooks,
-  ugc_casual for natural talking, product_proof for demos/closeups,
-  testimonial for honest proof, cinematic_narrator for polished story,
-  tutorial_clear for how-to, calm_lifestyle for cozy scenes,
-  urgent_reaction for high-energy reactions, mostly_visual for sparse VO.
-- Voice emotion is a first-run scene decision, not an afterthought. Let
-  audio_mode follow the beat's emotional job: hooks need curiosity and momentum,
-  problem/friction beats need urgency or relatable frustration, product proof
-  beats need clear slightly impressed emphasis, cozy/lifestyle beats need warmth,
-  and payoff/CTA beats need satisfied confidence.
-- Keep one stable speaker voice for single-speaker UGC/testimonials unless the
-  user asks for multiple speakers. Vary emotion through audio_mode/audio_note,
-  not by changing voice identity from scene to scene.
-- audio_note is optional and rare; use it only when the product/story needs a
-  specific performance nuance the mode cannot express, such as "trying not to
-  sound annoyed" or "quiet relief after a long workday." Keep it voice-only and
-  under 80 chars. Never put camera directions, visual details, schema terms, or
-  raw Hume settings in audio_note.
-- Do not add bracketed emotion or performance cues to UGC/on-camera narration.
-  For pure b-roll voiceover only, expression cues may be used sparingly if they
-  are known to be provider controls and not spoken words.
-- Image prompts should be concrete: subject, setting, light, composition,
-  style, mood, and important visual details.
-- For non-graphic historical rescue scenes involving children, use provider-safe
-  keyframes: a fully clothed or bundled child gently descending into waiting
-  arms, with no injury, distress, exposed body, or impact imagery.
-- Image prompts are single full-frame keyframes only. Do not request
-  split-screen, collage, storyboard, panel, grid, contact-sheet, or before/after
-  layouts inside a single generated image; use separate scenes instead.
-- For product shots, keep one primary product instance in the frame unless the
-  user explicitly asks for a lineup or comparison. Avoid duplicate product
-  variants, unrelated packaging, rows of products, and extra invented products.
-- Product b-roll should prove something through visible action: a reminder
-  firing, a feature being used, a setting changing, a result appearing, a
-  creator reacting, or a real use moment. Do not spend a full scene only on a
-  logo/design-detail showcase unless the user explicitly asks for a hero shot.
-- Video prompts must describe only camera or subject motion that can happen in
-  the current still image.
-- When a story_beat contains a causal action, put the matching visible motion in
-  video_prompt using an explicit verb: falls or descends, catches, enters, leaves,
-  strikes, or explodes. Do not show only the setup, reaction, or aftermath.
-- Treat each scene's spoken line as a timing and evidence contract for that exact
-  scene. If narration says a subject falls, catches, arrives, leaves, hands over,
-  uses, opens, or reveals something, that same subject and literal action must be
-  visible in that scene's story_beat, keyframe state, and video_prompt. Never let
-  narration describe a different scene, an event that already happened, or an
-  event that will only happen after the next cut.
-- End each scene narration as a complete spoken thought. The measured start of
-  the next scene's narration becomes the preferred hard-cut boundary, so do not
-  move one sentence's visual evidence into an adjacent scene.
-- For falls, collisions, catches, entries, and handoffs, state origin, path,
-  contact point, and destination in the continuity ledger and keyframe. Gravity
-  must read vertically: source above, moving subject between, destination below.
-- Treat image_prompt as a stable cinematic keyframe and video_prompt as a small,
-  grounded motion instruction for that exact keyframe.
-- Use hard cuts between scenes. Do not write transitions, fades, wipes,
-  dissolves, match cuts, or scene-to-scene effects into prompts.
-- Make image prompts concrete and continuity-complete rather than terse. Every
-  scene must specify one distinct chronological story beat, all visible required
-  subjects, inherited world state, setting/time, and stable visual style.
-- Write each image_prompt from the current opening state and physical layout, not
-  as an isolated illustration of the narration. If the scene continues directly,
-  preserve the previous closing positions and screen direction. If time or place
-  changes, state that bridge explicitly before establishing the new layout.
-- Never create title cards, black/blank text frames, or emoji-only scenes.
-- Do not add captions, logos, text, impossible camera moves, or continuity
-  details that contradict the scene ledger.
 `.trim();

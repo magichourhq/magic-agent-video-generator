@@ -264,7 +264,9 @@ export function scenePhysicsContext(
 ): string {
   const sceneIndex = plan.scenes.findIndex((item) => item.id === scene.id);
   const previous = sceneIndex > 0 ? plan.scenes[sceneIndex - 1] : null;
+  const next = sceneIndex >= 0 && sceneIndex < plan.scenes.length - 1 ? plan.scenes[sceneIndex + 1] : null;
   const directContinuation = previous ? shouldChainPreviousKeyframe(plan, sceneIndex) : false;
+  const directHandoff = next ? shouldChainPreviousKeyframe(plan, sceneIndex + 1) : false;
   const worldAnchors = options.globalWorldAnchors ?? plan.visual_bible.trim();
   const requiredSubjects = options.providerSafeMinor
     ? scene.continuity.required_subjects.map((subject) =>
@@ -285,6 +287,9 @@ export function scenePhysicsContext(
       : "",
     options.openingKeyframeOnly ? "" : `Chronological event: ${scene.continuity.story_beat}`,
     options.openingKeyframeOnly ? "" : `State after this scene's motion: ${scene.continuity.closing_state}`,
+    !options.openingKeyframeOnly && next && directHandoff
+      ? `Next scene handoff target: ${next.continuity.opening_state}. End this scene in a compatible physical state, but do not begin the next scene's action.`
+      : "",
     scene.continuity.screen_direction !== "not_applicable"
       ? `Persistent screen direction: ${scene.continuity.screen_direction.replaceAll("_", " ")}`
       : "",

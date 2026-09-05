@@ -4,7 +4,6 @@ import { fileURLToPath } from "node:url";
 import { parse as parseDotenv } from "dotenv";
 
 export const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
-const SHARED_ENV = "/Users/tanmay/Magic Hour ML role/.env";
 
 function dotenvValues(filePath: string): Record<string, string> {
   if (!existsSync(filePath)) return {};
@@ -12,10 +11,7 @@ function dotenvValues(filePath: string): Record<string, string> {
 }
 
 export function loadEnv(): Record<string, string> {
-  const values: Record<string, string> = {
-    ...dotenvValues(SHARED_ENV),
-    ...dotenvValues(path.join(ROOT, ".env")),
-  };
+  const values: Record<string, string> = dotenvValues(path.join(ROOT, ".env"));
   for (const [key, value] of Object.entries(process.env)) {
     if (value !== undefined) values[key] = value;
   }
@@ -85,7 +81,7 @@ export const OPENAI_TEXT_PRICING_USD_PER_1M: Record<
 export const DEFAULT_AUTO_DURATION_SECONDS = 15;
 export const DEFAULT_AUTO_SCENE_BUDGET_COUNT = 4;
 export const DEFAULT_MAGIC_HOUR_IMAGE_MODEL = "nano-banana-2-lite";
-export const DEFAULT_MAGIC_HOUR_VIDEO_MODEL = "ltx-2.3";
+export const DEFAULT_MAGIC_HOUR_VIDEO_MODEL = "minimax-h3";
 export const DEFAULT_AGENT_MAX_TURNS = 30;
 export const DEFAULT_TTS_WORDS_PER_SECOND = 2.8;
 export const DEFAULT_HUME_TTS_WORDS_PER_SECOND = 2.95;

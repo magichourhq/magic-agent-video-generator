@@ -1,5 +1,4 @@
 import { existsSync } from "node:fs";
-import path from "node:path";
 import { execa } from "execa";
 import {
   DEFAULT_AGENT_MAX_TURNS,
@@ -147,7 +146,7 @@ export function contextForExistingProject(projectId: string): ProjectContext {
     image_model: "seedream-v4",
     image_resolution: "1k",
     image_style_tool: "general",
-    video_model: "ltx-2.3",
+    video_model: DEFAULT_MAGIC_HOUR_VIDEO_MODEL,
     video_audio: false,
     audio_provider: "hume",
     audio_model: "octave-1",

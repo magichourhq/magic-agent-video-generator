@@ -13,7 +13,6 @@ import {
 import { configuredAgentMaxTurns, requestFromProjectState } from "./projectContext.js";
 import { updateProjectStatus } from "./projects.js";
 import {
-  buildGenerationBrief,
   buildYoutubeScriptPrompt,
   normalizeYoutubeScriptPlan,
   youtubeScriptNarration,
@@ -29,15 +28,12 @@ import {
   SceneSchema,
   SceneNarrationRevisionSchema,
   VIDEO_VIBES,
-  VideoPlanSchema,
-  YouTubeClipSectionSchema,
   YouTubeScriptPlanSchema,
   type CreateProjectRequest,
-  type VideoPlan,
   type YouTubeScriptPlan,
 } from "./schemas.js";
-import { INSTRUCTIONS, PLANNING_INSTRUCTIONS } from "./prompts.js";
-import { pendingTokenOutputForContext, writeTokenOutput } from "./usageCost.js";
+import { INSTRUCTIONS } from "./prompts.js";
+import { pendingTokenOutputForContext } from "./usageCost.js";
 import { VOICE_KEYS } from "./voices.js";
 import { reviewYoutubeScriptWithSubagent, youtubeSubagentModel } from "./youtubeSubagents.js";
 import { classifyMagicHourRequest } from "./magicHourCapabilities.js";
@@ -51,7 +47,6 @@ import {
   inspectTimelineImpl,
   inspectRenderStatusImpl,
   moveTimelineClipImpl,
-  normalizePlan,
   recordProjectDecisionImpl,
   requestClarificationImpl,
   regenerateSceneImpl,
@@ -250,10 +245,12 @@ export const animateSceneVideos = tool({
   name: "animate_scene_videos",
   description:
     "Animate scene videos from generated images. " +
-    "model: Magic Hour image-to-video model. Default to ltx-2.3 unless the user explicitly selected a different " +
+    "model: Magic Hour image-to-video model. Default to minimax-h3 unless the user explicitly selected a different " +
     "model or the prompt clearly needs a model-specific capability. Use seedance-2.0 for consistency, kling-2.5 for " +
     "motion/camera control, kling-3.0 for cinematic storytelling, veo3.1 for realism/prompt adherence, or sora-2 for " +
-    "story-first creative motion only when that tradeoff is intentional. resolution: output video resolution " +
+    "story-first creative motion only when that tradeoff is intentional. MiniMax H3 is the default reference-driven " +
+    "model and supports native audio, but keep provider audio disabled when our narration or talking-photo layer owns speech. " +
+    "resolution: output video resolution " +
     "supported by the selected video model. audio: whether Magic Hour should generate provider audio; usually false " +
     "because the final edit uses the selected TTS provider voiceover. On-camera (talking) scenes are rendered via AI Talking Photo " +
     "from the scene's keyframe image + a per-scene TTS line (not imageToVideo), so keep audio:false — provider " +
@@ -562,35 +559,6 @@ export const retryScene = tool({
   },
 });
 
-export const createYoutubeShort = tool({
-  name: "create_youtube_short",
-  description:
-    "Create a short from searched YouTube clips, current TTS voiceover, and ffmpeg stitching. title: concise title " +
-    "for the finished short. narration: full spoken script made by joining the section dialogue in order. sections: " +
-    "ordered clip plan; each section needs dialogue, a YouTube search hint, and duration. proxy_url: optional proxy " +
-    "URL for yt-dlp downloads when needed.",
-  parameters: z.object({
-    title: z.string(),
-    narration: z.string(),
-    sections: z.array(YouTubeClipSectionSchema),
-    proxy_url: z.string().nullable().default(null),
-  }),
-  deferLoading: true,
-  execute: async (input, runContext) => {
-    const ctx = runContext!.context as ProjectContext;
-    await updateProjectStatus(ctx.project_id, {
-      status: "running",
-      stage: "youtube_short",
-      progress: 20,
-      message: "Creating a YouTube clip short.",
-    });
-    return createYoutubeShortImpl(ctx, input.title, input.narration, input.sections, {
-      token_output: pendingTokenOutputForContext(ctx),
-      proxy_url: input.proxy_url,
-    });
-  },
-});
-
 export const createYoutubeShortFromPrompt = tool({
   name: "create_youtube_short_from_prompt",
   description:
@@ -640,21 +608,6 @@ export const VIDEO_STUDIO_TOOLS = toolNamespace({
   ],
 });
 
-export const FIRST_RENDER_VIDEO_STUDIO_TOOLS = toolNamespace({
-  name: "video_studio",
-  description: "First-render video generation tools. Edit and retry tools are intentionally unavailable.",
-  tools: [
-    requestClarification,
-    draftVideoPlan,
-    generateVoiceover,
-    generateSceneImages,
-    animateSceneVideos,
-    stitchFinalVideo,
-    inspectRenderStatus,
-    recordProjectDecision,
-  ],
-});
-
 export const YOUTUBE_SHORT_TOOLS = toolNamespace({
   name: "youtube_short",
   description: "Create shorts from searched YouTube clips, current-project voiceover, and ffmpeg stitching.",
@@ -680,21 +633,6 @@ function firstRenderToolsForRequest(request: CreateProjectRequest) {
     recordProjectDecision,
   ];
 }
-
-// Legacy direct planner retained for focused plan/token tests; runProject uses videoAgent.
-export const planningAgentModel = ENV.OPENAI_MODEL ?? DEFAULT_OPENAI_AGENT_MODEL;
-export const planningAgent = new Agent<ProjectContext, typeof VideoPlanSchema>({
-  name: "Fast Video Planning Agent",
-  model: planningAgentModel,
-  instructions: PLANNING_INSTRUCTIONS,
-  tools: [],
-  outputType: VideoPlanSchema,
-  modelSettings: {
-    reasoning: { effort: (ENV.OPENAI_REASONING_EFFORT ?? "low") as any },
-    text: { verbosity: (ENV.OPENAI_VERBOSITY ?? "low") as any },
-    parallelToolCalls: false,
-  },
-});
 
 export function youtubeScriptModel(): string {
   return ENV.YOUTUBE_SCRIPT_MODEL ?? ENV.OPENAI_FAST_MODEL ?? ENV.OPENAI_MODEL ?? "gpt-5.4";
@@ -739,8 +677,6 @@ export function youtubeScriptAgentForRequest(request: CreateProjectRequest | nul
   });
 }
 
-export const youtubeScriptAgent = youtubeScriptAgentForRequest();
-
 // The production path: the agent owns planning, provider-tool sequencing,
 // retries, and stitching. The UI workflow toggle is enforced through the run
 // brief, not by swapping to a different orchestrator agent.
@@ -750,22 +686,6 @@ export const videoAgent = new Agent<ProjectContext>({
   model: videoAgentModel,
   instructions: INSTRUCTIONS,
   tools: [...VIDEO_STUDIO_TOOLS, ...YOUTUBE_SHORT_TOOLS, toolSearchTool()],
-  modelSettings: {
-    reasoning: { effort: (ENV.OPENAI_REASONING_EFFORT ?? "low") as any },
-    text: { verbosity: (ENV.OPENAI_VERBOSITY ?? "low") as any },
-    parallelToolCalls: true,
-  },
-});
-
-export const firstRenderVideoAgent = new Agent<ProjectContext>({
-  name: "First-Render Video Art Director",
-  model: videoAgentModel,
-  instructions:
-    INSTRUCTIONS +
-    "\n\nFirst-render constraint: produce the first complete requested output only. Do not edit, retry, regenerate, trim, " +
-    "or restitch as a subjective improvement during the first run. Provider recovery may happen inside " +
-    "stitch_final_video using already-submitted job ids, but do not spend on extra scene renders.",
-  tools: [...FIRST_RENDER_VIDEO_STUDIO_TOOLS, ...YOUTUBE_SHORT_TOOLS, toolSearchTool()],
   modelSettings: {
     reasoning: { effort: (ENV.OPENAI_REASONING_EFFORT ?? "low") as any },
     text: { verbosity: (ENV.OPENAI_VERBOSITY ?? "low") as any },
@@ -862,21 +782,6 @@ export function projectMessageAgentForContext(ctx: ProjectContext) {
     return openRouterMessageAgentForContext(ctx);
   }
   return videoAgent;
-}
-
-export async function planVideo(
-  request: CreateProjectRequest,
-  ctx: ProjectContext,
-): Promise<[VideoPlan, JsonDict]> {
-  const runtime = resolveAgentRuntime(request);
-  assertAgentRuntimeReady(runtime);
-  const result = await runnerForRuntime(runtime).run(cloneAgentForRuntime(planningAgent, runtime), buildGenerationBrief(request, ctx), {
-    context: ctx,
-    maxTurns: configuredAgentMaxTurns(),
-  });
-  const tokenOutput = writeTokenOutput(ctx, result.runContext.usage, runtime.model, runtime.provider);
-  const plan = VideoPlanSchema.parse(result.finalOutput);
-  return [normalizePlan(plan), tokenOutput];
 }
 
 export function youtubeScriptResultUsedWebSearch(result: { newItems: any[] }): boolean {

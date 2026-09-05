@@ -2,12 +2,9 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   createProject,
   createYoutubeReviewBatch,
-  createYoutubeReviewSession,
   getLatestYoutubeReviewBatch,
   getProject,
   getProjects,
-  getYoutubeReviewBatch,
-  getYoutubeReviewSession,
   patchProjectTimeline,
   saveYoutubeReviewComment,
   sendProjectMessage,
@@ -20,8 +17,6 @@ import type {
   TimelineEditPayload,
   YouTubeReviewBatchResponse,
   YouTubeReviewCommentPayload,
-  YouTubeReviewSessionPayload,
-  YouTubeReviewSessionResponse,
 } from "@/lib/types";
 
 export function useProject(projectId: string | null) {
@@ -96,34 +91,6 @@ export function usePatchProjectTimeline(projectId: string | null) {
   });
 }
 
-export function useYoutubeReviewSession(reviewId: string | null) {
-  return useQuery({
-    queryKey: ["youtube-review-session", reviewId],
-    queryFn: async () => {
-      if (!reviewId) throw new Error("No review session ID");
-      return getYoutubeReviewSession(reviewId);
-    },
-    enabled: !!reviewId,
-    refetchInterval: (query) => {
-      const data = query.state.data as YouTubeReviewSessionResponse | undefined;
-      const hasRunningProvider = Object.values(data?.providers ?? {}).some(
-        (provider) => provider.status?.status === "queued" || provider.status?.status === "running",
-      );
-      return hasRunningProvider ? 2000 : false;
-    },
-  });
-}
-
-export function useCreateYoutubeReviewSession() {
-  const queryClient = useQueryClient();
-  return useMutation({
-    mutationFn: (data: YouTubeReviewSessionPayload) => createYoutubeReviewSession(data),
-    onSuccess: (data) => {
-      queryClient.setQueryData(["youtube-review-session", data.review_id], data);
-    },
-  });
-}
-
 function reviewBatchHasRunningProviders(data: YouTubeReviewBatchResponse | undefined) {
   return Object.values(data?.items ?? {}).some((item) =>
     Object.values(item.review?.providers ?? {}).some(
@@ -141,21 +108,6 @@ export function useLatestYoutubeReviewBatch(enabled = true) {
     refetchInterval: (query) => {
       const data = query.state.data as YouTubeReviewBatchResponse | undefined;
       if (!data) return false;
-      return reviewBatchHasRunningProviders(data) ? 2000 : false;
-    },
-  });
-}
-
-export function useYoutubeReviewBatch(batchId: string | null) {
-  return useQuery({
-    queryKey: ["youtube-review-batch", batchId],
-    queryFn: async () => {
-      if (!batchId) throw new Error("No review batch ID");
-      return getYoutubeReviewBatch(batchId);
-    },
-    enabled: !!batchId,
-    refetchInterval: (query) => {
-      const data = query.state.data as YouTubeReviewBatchResponse | undefined;
       return reviewBatchHasRunningProviders(data) ? 2000 : false;
     },
   });
@@ -188,4 +140,3 @@ export function useSaveYoutubeReviewComment(batchId?: string | null) {
     },
   });
 }
-

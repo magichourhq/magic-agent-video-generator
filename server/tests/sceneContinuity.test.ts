@@ -4,6 +4,7 @@ import {
   causalMotionInstruction,
   causalOpeningKeyframeGuidance,
   realWorldStagingGuidance,
+  scenePhysicsContext,
   shouldChainPreviousKeyframe,
   validateSceneContinuity,
 } from "../src/sceneContinuity.js";
@@ -17,6 +18,8 @@ function scene(id: string, overrides: Partial<Scene> = {}): Scene {
     video_prompt: "The child takes one step left to right while the camera remains steady.",
     duration_seconds: 5,
     on_camera: false,
+    audio_source: null,
+    native_audio_prompt: null,
     audio_mode: "cinematic_narrator",
     audio_note: null,
     reference_media_ids: [],
@@ -83,6 +86,26 @@ describe("scene continuity contract", () => {
     });
 
     expect(realWorldStagingGuidance(walking)).not.toContain("object begins resting");
+  });
+
+  it("carries a continuing scene's next entry state into the motion packet", () => {
+    const first = scene("scene_1", {
+      continuity: {
+        ...scene("base").continuity,
+        closing_state: "The child stands beside the adult on the same sunlit sidewalk.",
+      },
+    });
+    const second = scene("scene_2", {
+      continuity: {
+        ...scene("base").continuity,
+        opening_state: "The child stands beside the adult on the same sunlit sidewalk.",
+      },
+    });
+
+    const context = scenePhysicsContext(plan([first, second]), first);
+    expect(context).toContain("Next scene handoff target");
+    expect(context).toContain(second.continuity.opening_state);
+    expect(context).toContain("do not begin the next scene's action");
   });
 
   it("rejects a required subject missing from the keyframe and state", () => {

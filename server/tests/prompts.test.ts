@@ -3,7 +3,6 @@ import { PROJECT_CONTEXT_DEFAULTS } from "../src/context.js";
 import { CreateProjectRequestSchema } from "../src/schemas.js";
 import {
   INSTRUCTIONS,
-  PLANNING_INSTRUCTIONS,
   buildGenerationBrief,
   estimateTtsWordsPerSecondForContext,
   magicHourModelCatalogForAgent,
@@ -74,52 +73,6 @@ describe("INSTRUCTIONS on-camera contract", () => {
     expect(INSTRUCTIONS).toContain("request_clarification");
     expect(INSTRUCTIONS).toContain("before any paid provider tool");
     expect(INSTRUCTIONS).not.toContain("Do not ask clarification questions. Infer missing details");
-  });
-});
-
-describe("PLANNING_INSTRUCTIONS on-camera contract", () => {
-  it("documents explicit on_camera choices", () => {
-    expect(PLANNING_INSTRUCTIONS).toContain("on_camera");
-    expect(PLANNING_INSTRUCTIONS).not.toContain("defaults to true");
-  });
-
-  it("states the visual-bible schema limit before the planner submits", () => {
-    expect(PLANNING_INSTRUCTIONS).toContain("at or below 2400 characters");
-  });
-
-  it("documents the voice catalog so the planner picks a character-matched voice", () => {
-    expect(PLANNING_INSTRUCTIONS).toContain("voice");
-    expect(PLANNING_INSTRUCTIONS).toContain("sarah");
-    expect(PLANNING_INSTRUCTIONS).toContain("ethan");
-  });
-
-  it("uses compact audio performance modes instead of raw Hume settings", () => {
-    expect(PLANNING_INSTRUCTIONS).toContain("Set audio_mode per scene");
-    expect(PLANNING_INSTRUCTIONS).toContain("ugc_hook");
-    expect(PLANNING_INSTRUCTIONS).toContain("Voice emotion is a first-run scene decision");
-    expect(PLANNING_INSTRUCTIONS).toContain("Vary emotion through audio_mode/audio_note");
-    expect(PLANNING_INSTRUCTIONS).toContain("audio_note is optional and rare");
-    expect(PLANNING_INSTRUCTIONS).toContain("raw Hume settings");
-  });
-
-  it("requires format intent, proof beats, and stronger scene pacing in the first plan", () => {
-    expect(PLANNING_INSTRUCTIONS).toContain("format intent");
-    expect(PLANNING_INSTRUCTIONS).toContain("creative_vibe");
-    expect(PLANNING_INSTRUCTIONS).toContain("proof/demo/closeup");
-    expect(PLANNING_INSTRUCTIONS).toContain("Let narrative complexity choose scene count");
-    expect(PLANNING_INSTRUCTIONS).toContain("4-8 at 16-30s");
-  });
-
-  it("documents hard cuts instead of transition effects", () => {
-    expect(PLANNING_INSTRUCTIONS).toContain("Use hard cuts between scenes");
-    expect(PLANNING_INSTRUCTIONS).toContain("Do not write transitions");
-  });
-
-  it("keeps non-graphic child rescue imagery visible and provider-safe", () => {
-    expect(INSTRUCTIONS).toContain("provider-safe imagery");
-    expect(PLANNING_INSTRUCTIONS).toContain("bundled child gently descending");
-    expect(PLANNING_INSTRUCTIONS).toContain("matching visible motion");
-    expect(PLANNING_INSTRUCTIONS).toContain("for LTX 2.3 choose its supported ten-second duration");
   });
 });
 

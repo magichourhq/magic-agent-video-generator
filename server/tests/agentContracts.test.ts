@@ -1,7 +1,5 @@
 import { describe, expect, it } from "vitest";
 import {
-  firstRenderVideoAgent,
-  FIRST_RENDER_VIDEO_STUDIO_TOOLS,
   projectAgentForRequest,
   VIDEO_STUDIO_TOOLS,
   videoAgent,
@@ -113,30 +111,10 @@ describe("videoAgent tool surface", () => {
 
     expect(generatedTools.has("draft_video_plan")).toBe(true);
     expect(generatedTools.has("regenerate_scene")).toBe(false);
+    expect(generatedTools.has("retry_scene")).toBe(false);
+    expect(generatedTools.has("restitch_video")).toBe(false);
     expect(youtubeTools.has("create_youtube_short_from_prompt")).toBe(true);
     expect(youtubeTools.has("draft_video_plan")).toBe(false);
-    expect(firstRenderVideoAgent).not.toBe(videoAgent);
-  });
-
-  it("keeps retry and edit tools out of the first-render tool surface", () => {
-    const toolNames = new Set(firstRenderVideoAgent.tools.map((tool: any) => tool.name));
-
-    expect(FIRST_RENDER_VIDEO_STUDIO_TOOLS.map((tool: any) => tool.name)).toEqual([
-      "request_clarification",
-      "draft_video_plan",
-      "generate_voiceover",
-      "generate_scene_images",
-      "animate_scene_videos",
-      "stitch_final_video",
-      "inspect_render_status",
-      "record_project_decision",
-    ]);
-    expect(toolNames.has("regenerate_scene")).toBe(false);
-    expect(toolNames.has("retry_scene")).toBe(false);
-    expect(toolNames.has("restitch_video")).toBe(false);
-    // Required by @openai/agents for deferred tool namespaces; the first-render
-    // restriction is enforced by the namespace contents above.
-    expect(toolNames.has("tool_search")).toBe(true);
   });
 });
 
@@ -160,4 +138,3 @@ describe("YouTube workflow guardrails", () => {
     expect(YOUTUBE_REVIEW_PROVIDERS_ACTIVE).toEqual(["youtube_data_api"]);
   });
 });
-

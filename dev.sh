@@ -5,15 +5,7 @@ ROOT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 SERVER_DIR="$ROOT_DIR/server"
 FRONTEND_DIR="$ROOT_DIR/frontend"
 LOG_DIR="$ROOT_DIR/.run-logs"
-SHARED_ENV="/Users/tanmay/Magic Hour ML role/.env"
 mkdir -p "$LOG_DIR"
-
-if [[ -f "$SHARED_ENV" ]]; then
-  set -a
-  # shellcheck disable=SC1090
-  source "$SHARED_ENV"
-  set +a
-fi
 
 if [[ -f "$ROOT_DIR/.env" ]]; then
   set -a

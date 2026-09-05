@@ -81,6 +81,7 @@ export type MagicVideoModel =
   | "default"
   | "ltx-2"
   | "ltx-2.3"
+  | "minimax-h3"
   | "wan-2.2"
   | "seedance"
   | "seedance-2.0"
@@ -94,14 +95,6 @@ export type MagicVideoModel =
 export interface ProjectMessagePayload {
   message: string;
   runtime_credentials?: RuntimeCredentials | null;
-}
-
-export interface YouTubeReviewSessionPayload {
-  prompt: string;
-  duration_seconds?: number | null;
-  scene_count?: number | null;
-  aspect_ratio: string;
-  resolution: string;
 }
 
 export interface YouTubeReviewCommentPayload {

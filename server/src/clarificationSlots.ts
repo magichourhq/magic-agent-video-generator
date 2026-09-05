@@ -14,11 +14,14 @@ export interface ClarificationSlotAnalysis {
 
 const IMAGE = /\b(image|picture|photo|poster|thumbnail|still|wallpaper|mockup|logo|artwork|illustration|cover art|cover)\b/i;
 const VIDEO = /\b(video|reel|tiktok|short|commercial|ad|ugc|clip|scene|skit|film|animate|animation|trailer|story|explainer|podcast moments?|podcast clips?|montage)\b/i;
-const EDIT = /\b(edit|replace|swap|upscale|remove background|colorize|lip[- ]?sync|captions?|subtitles?|face|body|head|clothes)\b/i;
+const EDIT =
+  /\b(edit|replace|swap|upscale|remove background|colorize|lip[- ]?sync|captions?|subtitles?|face swap|body swap|head swap|change clothes)\b/i;
 const YOUTUBE = /\b(youtube|source clips?|real clips?|real footage|news footage|existing footage|pull clips?|find clips?|creator clips?|real interviews|clip compilation|podcast moments?|podcast clips?)\b/i;
 const UGC = /\b(ugc|tiktok|reel|shorts?|testimonial|normal person|creator|influencer|selfie|talking to camera)\b/i;
 const PRODUCT =
   /\b(product|brand|ad|commercial|demo|launch|app|tool|software|bottle|lamp|serum|service|shop|store|cafe|coffee|restaurant|studio|clinic|nonprofit)\b/i;
+const PRODUCT_CONTEXT =
+  /\b(product|brand|ad|advertisement|commercial|demo|launch|app|tool|software|service|sponsored|buy|shop|store|restaurant|studio|clinic|nonprofit)\b|\bugc\s+(?:for|about)\b/i;
 const DURATION = /\b(\d+\s*[- ]?\s*(?:s|sec|second|seconds|min|minute|minutes)|short|long|quick|about a minute|one minute)\b/i;
 const QUOTED = /["“”'][^"“”'\n]{4,}["“”']/;
 const SPEECH = /\b(say|says|saying|dialogue|voiceover|narration|narrate|talk|speaking|script)\b/i;
@@ -111,6 +114,7 @@ export function analyzeClarificationSlots(
   const format = formatFor(prompt, outputType);
   const subjectPresent = hasConcreteSubject(prompt);
   const durationPresent = outputType === "video" ? Boolean(request.duration_seconds || DURATION.test(prompt)) : true;
+  const requiresProductContext = outputType === "video" && PRODUCT_CONTEXT.test(prompt);
   const questions: string[] = [];
   const missing: string[] = [];
 
@@ -130,10 +134,10 @@ export function analyzeClarificationSlots(
     missing.push("source_topic");
     questions.push("What topic or angle should the YouTube/source clips cover?");
   }
-  if (outputType === "video" && (format === "ugc" || format === "product") && !PRODUCT_DETAIL.test(prompt)) {
+  if (requiresProductContext && !PRODUCT_DETAIL.test(prompt)) {
     missing.push("product_context");
     questions.push("What product or service is this for, and what main benefit should the video prove?");
-  } else if (outputType === "video" && (format === "ugc" || format === "product") && !PROOF_DETAIL.test(prompt) && compactWords(prompt).length < 8) {
+  } else if (requiresProductContext && !PROOF_DETAIL.test(prompt) && compactWords(prompt).length < 8) {
     missing.push("proof_point");
     questions.push("What specific feature, proof point, or result should be visibly demonstrated?");
   }

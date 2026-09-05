@@ -142,6 +142,7 @@ const IMAGE_RESOLUTIONS: MagicImageResolution[] = ["640px", "1k", "2k", "4k"];
 const VIDEO_MODELS: Array<{ value: VideoModelSelection; label: string }> = [
   { value: "auto", label: "Agent chooses" },
   { value: "default", label: "Magic default" },
+  { value: "minimax-h3", label: "MiniMax H3" },
   { value: "ltx-2.3", label: "LTX 2.3" },
   { value: "ltx-2", label: "LTX 2" },
   { value: "seedance", label: "Seedance" },

@@ -2,12 +2,18 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ProjectContext } from "../src/context.js";
-import { PROJECT_CONTEXT_DEFAULTS } from "../src/context.js";
 // `withMediaUrl` (called at the end of `animateSceneVideosImpl`) rejects asset
 // paths outside OUTPUT_DIR, so the temp project dir must live under it.
 import { OUTPUT_DIR } from "../src/config.js";
-import type { Scene, VideoPlan } from "../src/schemas.js";
+import type { Scene } from "../src/schemas.js";
 import { FISH_AUDIO_VOICES } from "../src/voices.js";
+import {
+  makeScene,
+  seedPlanAndImages,
+  silentClipFor,
+  talkingClipFor,
+  testContext,
+} from "./helpers/testFixtures.js";
 
 // --- media.ts mock --------------------------------------------------------
 // `animateSceneVideosImpl` imports a fixed set of names from `media.js`. We
@@ -67,71 +73,12 @@ const {
 } = await import("../src/workflows.js");
 const { initializeProjectState, readJsonArtifact, writeJsonArtifact } = await import("../src/renderState.js");
 
-function makeScene(overrides: Partial<Scene> & Pick<Scene, "id">): Scene {
-  return {
-    narration: "",
-    image_prompt: "an image",
-    video_prompt: "a video",
-    duration_seconds: 2,
-    on_camera: true,
-    audio_mode: "ugc_casual",
-    audio_note: null,
-    reference_media_ids: [],
-    continuity: {
-      story_beat: "",
-      required_subjects: [],
-      opening_state: "",
-      closing_state: "",
-      setting: "",
-      screen_direction: "not_applicable",
-    },
-    ...overrides,
-  };
-}
-
-function testContext(projectDir: string): ProjectContext {
-  return {
-    project_id: "workflows-lipsync-test",
-    project_dir: projectDir,
-    aspect_ratio: "16:9",
-    resolution: "720p",
-    ...PROJECT_CONTEXT_DEFAULTS,
-  };
-}
-
-function seedPlanAndImages(
-  ctx: ProjectContext,
-  scenes: Scene[],
-  planOverrides: Partial<Pick<VideoPlan, "voice" | "visual_bible">> = {},
-): void {
-  const plan: VideoPlan = {
-    title: "Test plan",
-    creative_vibe: "polished_ugc",
-    narration: "overall narration",
-    visual_bible: "",
-    scenes,
-    voice: null,
-    ...planOverrides,
-  };
-  writeJsonArtifact(ctx, "plan", plan);
-  const images = scenes.map((scene) => ({
-    scene_id: scene.id,
-    path: path.join(ctx.project_dir, "images", `${scene.id}.png`),
-    prompt: scene.image_prompt,
-    model: ctx.image_model,
-    resolution: ctx.image_resolution,
-    provider_job_id: null,
-    provider_url: null,
-  }));
-  writeJsonArtifact(ctx, "images", images);
-}
-
 let projectDir: string;
 let ctx: ProjectContext;
 
 beforeEach(() => {
   projectDir = mkdtempSync(path.join(OUTPUT_DIR, "workflows-lipsync-"));
-  ctx = testContext(projectDir);
+  ctx = testContext(projectDir, "workflows-lipsync-test");
   generateVideoAssetsBatch.mockReset();
   generateSceneVoiceovers.mockReset();
   generateSceneVoiceovers.mockImplementation(async (_ctx: ProjectContext, scenes: Scene[]) =>
@@ -155,38 +102,6 @@ afterEach(() => {
   vi.restoreAllMocks();
   rmSync(projectDir, { recursive: true, force: true });
 });
-
-function silentClipFor(ctx: ProjectContext, scene: Scene) {
-  return {
-    scene_id: scene.id,
-    path: path.join(ctx.project_dir, "videos", `${scene.id}.mp4`),
-    prompt: scene.video_prompt,
-    model: ctx.video_model,
-    resolution: ctx.resolution,
-    audio: false,
-    duration_seconds: scene.duration_seconds,
-    provider_job_id: null,
-    provider_url: null,
-  };
-}
-
-function talkingClipFor(ctx: ProjectContext, scene: Scene, audioPath: string, audioDuration: number) {
-  return {
-    scene_id: scene.id,
-    path: path.join(ctx.project_dir, "videos", scene.id, "talking", "talking.mp4"),
-    prompt: scene.video_prompt,
-    model: "ai-talking-photo",
-    resolution: ctx.resolution,
-    audio: true,
-    duration_seconds: audioDuration,
-    provider_job_id: "talk1",
-    provider_url: null,
-    has_embedded_audio: true,
-    on_camera: true,
-    audio_path: audioPath,
-    audio_duration_seconds: audioDuration,
-  };
-}
 
 describe("animateSceneVideosImpl talking-photo partition", () => {
   it("voices only talking scenes, renders them via aiTalkingPhoto, and routes b-roll through imageToVideo", async () => {
@@ -485,6 +400,23 @@ describe("generateVoiceoverImpl per-scene audio path", () => {
     expect((generateSceneVoiceovers.mock.calls[0]![1] as Scene[]).map((scene) => scene.id)).toEqual(["scene_1", "scene_2"]);
     expect(result.stage).toBe("voiceover_generated");
     expect(result.next_tools).toEqual(["generate_scene_images", "animate_scene_videos"]);
+  });
+
+  it("does not call TTS for a native H3 audio scene", async () => {
+    const native = makeScene({
+      id: "scene_1",
+      narration: "",
+      on_camera: false,
+      audio_source: "native_scene_audio",
+      native_audio_prompt: "Natural room tone, footsteps, and a softly closing door.",
+    });
+    seedPlanAndImages(ctx, [native]);
+
+    const result = await generateVoiceoverImpl(ctx);
+
+    expect(generateVoiceoverAsset).not.toHaveBeenCalled();
+    expect(generateSceneVoiceovers).not.toHaveBeenCalled();
+    expect(result.voiceover_skipped).toBe(true);
   });
 
   it("rejects measured per-scene voiceover underfill before paid image/video calls", async () => {
@@ -802,6 +734,41 @@ describe("stitchFinalVideoImpl talking-project branch", () => {
     const perScene = stitchMixedAssets.mock.calls[0]![1] as Array<Record<string, any>>;
     expect(perScene.map((s) => s.audio_duration_seconds)).toEqual([2.5, 2.5]);
     expect(manifest.final_video_path).toBe(fakeFinalVideo(ctx));
+  });
+
+  it("preserves a native H3 scene audio stream without generating external TTS", async () => {
+    const native = makeScene({
+      id: "scene_1",
+      narration: "",
+      on_camera: false,
+      audio_source: "native_scene_audio",
+      native_audio_prompt: "Street ambience, quick footsteps, and a passing bicycle bell.",
+      duration_seconds: 8,
+    });
+    seedPlanAndImages(ctx, [native]);
+    const videoPath = path.join(ctx.project_dir, "videos", native.id, "output.mp4");
+    writeJsonArtifact(ctx, "videos", [{
+      ...silentClipFor(ctx, native),
+      path: videoPath,
+      audio: true,
+      audio_source: "native_scene_audio",
+      has_embedded_audio: true,
+      audio_duration_seconds: 8,
+    }]);
+    stitchMixedAssets.mockResolvedValue(fakeFinalVideo(ctx));
+    probeMediaStreamDurations.mockResolvedValue({
+      format_duration_seconds: 8,
+      video_duration_seconds: 8,
+      audio_duration_seconds: 8,
+    });
+
+    await stitchFinalVideoImpl(ctx);
+
+    expect(generateSceneVoiceovers).not.toHaveBeenCalled();
+    const sections = stitchMixedAssets.mock.calls[0]![1] as Array<Record<string, any>>;
+    expect(sections).toHaveLength(1);
+    expect(sections[0]!.audio_path).toBe(videoPath);
+    expect(sections[0]!.target_duration_seconds).toBe(8);
   });
 });
 

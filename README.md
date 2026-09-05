@@ -1,8 +1,10 @@
 # Local Video Composer
 
-Production-shaped local workflow for turning one prompt into a finished MP4 with an OpenAI art-director agent, Magic Hour image/video generation, Fish/Hume voiceover, and ffmpeg stitching.
+Production-shaped local workflow for turning one prompt into a finished MP4 with an OpenAI Agents SDK art-director runtime, Magic Hour image/video generation, Fish/Hume/ElevenLabs voiceover, and ffmpeg stitching.
 
-This project is intentionally local-first. It does not add queue durability, backups, retries, or cloud deployment glue. It does make the local experience strict: clear configuration checks, live streamed render status, deterministic output folders, direct ffmpeg errors, and a polished browser workspace.
+This project is intentionally local-first. It has bounded in-process queues and provider recovery, but not a durable distributed queue, database, object storage, authentication, or cloud deployment layer. The local experience includes configuration checks, live streamed render status, deterministic output folders, direct ffmpeg errors, and a browser workspace.
+
+See [`HANDOFF.md`](HANDOFF.md) for the effective runtime defaults, credential contract, architecture, known limitations, production migration direction, and verification record.
 
 The backend is TypeScript end to end: a Fastify server built on the `@openai/agents` SDK.
 
@@ -85,13 +87,7 @@ outputs/<project_id>/final.mp4
 
 ## Setup
 
-The app reads shared secrets from:
-
-```text
-/Users/tanmay/Magic Hour ML role/.env
-```
-
-You can also add a project-local `.env`. Project-local values override the shared file, and real environment variables override both.
+Copy `.env.example` to a project-local `.env`, or provide credentials in the browser settings drawer. Process environment variables override project-local values. Request settings submitted by the browser override provider/model defaults for that project.
 The browser settings drawer can also provide OpenAI, OpenRouter, Magic Hour, Fish Audio, Hume, and ElevenLabs keys per run. Request-supplied keys are kept transient and are not written into project state.
 
 Required values:
@@ -108,18 +104,19 @@ ELEVENLABS_API_KEY=      # required only when AUDIO_PROVIDER=elevenlabs
 Useful defaults:
 
 ```bash
-OPENAI_MODEL=gpt-5.4
+AGENT_MODEL_PROVIDER=openrouter
+OPENROUTER_MODEL=deepseek/deepseek-v4-pro
+OPENROUTER_MAX_TOKENS=12000
 OPENAI_REASONING_EFFORT=low
 OPENAI_VERBOSITY=low
-AGENT_MODEL_PROVIDER=openai
-AGENT_MODEL_INTENSITY=standard
+AGENT_MODEL_INTENSITY=max
 OUTPUT_DIR=outputs
-MAGIC_HOUR_IMAGE_MODEL=seedream-v4
+MAGIC_HOUR_IMAGE_MODEL=nano-banana-2-lite
 MAGIC_HOUR_IMAGE_RESOLUTION=1k
 MAGIC_HOUR_IMAGE_STYLE_TOOL=general
-MAGIC_HOUR_VIDEO_MODEL=ltx-2.3
+MAGIC_HOUR_VIDEO_MODEL=minimax-h3
 MAGIC_HOUR_VIDEO_AUDIO=false
-AUDIO_PROVIDER=hume
+AUDIO_PROVIDER=elevenlabs
 FISH_AUDIO_MODEL=s2.1-pro
 FISH_AUDIO_FORMAT=mp3
 HUME_AUDIO_MODEL=octave-1
@@ -160,7 +157,6 @@ yt-dlp # only for the YouTube clips workflow
 ## Run
 
 ```bash
-cd "/Users/tanmay/Magic Hour ML role/openai_sdk_agent"
 ./dev.sh
 ```
 
@@ -215,4 +211,3 @@ curl -sS http://localhost:8000/api/projects/<project_id>/messages \
 ```
 
 The message endpoint appends the user message to `project_state.json`, queues an agent turn, and returns the same pollable project status shape. The agent receives the current project state and can inspect, patch, regenerate, or restitch through the bounded `video_studio` tools.
-

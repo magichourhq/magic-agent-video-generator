@@ -22,6 +22,8 @@ function scene(overrides: Partial<Scene> = {}): Scene {
     video_prompt: "small handheld push in",
     duration_seconds: 8,
     on_camera: true,
+    audio_source: null,
+    native_audio_prompt: null,
     audio_mode: "ugc_hook",
     audio_note: null,
     reference_media_ids: [],
